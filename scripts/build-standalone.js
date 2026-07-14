@@ -5,6 +5,7 @@ const root = process.cwd();
 const contentDir = path.join(root, "content");
 const outputDir = path.join(root, "outputs");
 const outputPath = path.join(outputDir, "ai-terminal-kb.html");
+const indexOutputPath = path.join(outputDir, "index.html");
 
 const navItems = [
   ["域名教程", "domain-tutorial.md", "01"],
@@ -31,7 +32,9 @@ const docs = readMarkdownFiles(contentDir).map((filePath) => {
 });
 
 fs.mkdirSync(outputDir, { recursive: true });
-fs.writeFileSync(outputPath, renderHtml({ docs, navItems }), "utf8");
+const html = renderHtml({ docs, navItems });
+fs.writeFileSync(outputPath, html, "utf8");
+fs.writeFileSync(indexOutputPath, html, "utf8");
 console.log(outputPath);
 
 function readMarkdownFiles(dir) {
