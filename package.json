@@ -1,0 +1,19 @@
+{
+  "name": "ai-terminal-kb",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "node scripts/preview-server.js",
+    "build:standalone": "node scripts/build-standalone.js"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.3.2",
+    "marked": "^18.0.6",
+    "tailwindcss": "^4.3.2",
+    "vite": "^8.1.4"
+  },
+  "devDependencies": {}
+}

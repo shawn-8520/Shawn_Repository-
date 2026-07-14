@@ -1,0 +1,16 @@
+node_modules/
+vendor/**/node_modules/
+.npm-cache/
+.DS_Store
+
+# Local secrets and machine-specific config
+.env
+.env.*
+*.pem
+*.key
+id_rsa*
+
+# Keep deployable static output, ignore duplicated app build cache.
+vendor/**/dist/
+dist/
+
