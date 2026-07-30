@@ -6,6 +6,33 @@ const contentDir = path.join(root, "content");
 const outputDir = path.join(root, "outputs");
 const outputPath = path.join(outputDir, "ai-terminal-kb.html");
 const indexOutputPath = path.join(outputDir, "index.html");
+const adminDistDir = path.join(root, "vendor", "vue-element-admin", "dist");
+const adminOutputDir = path.join(outputDir, "admin");
+const antdBundleDir = path.join(root, "generated", "antd-workbench");
+const antdJs = fs.existsSync(path.join(antdBundleDir, "workbench-antd.js"))
+  ? fs.readFileSync(path.join(antdBundleDir, "workbench-antd.js"), "utf8")
+  : "";
+const antdCss = fs.existsSync(path.join(antdBundleDir, "workbench-antd.css"))
+  ? fs.readFileSync(path.join(antdBundleDir, "workbench-antd.css"), "utf8")
+  : "";
+const statIconDir = path.join(root, "assets", "stat-icons");
+const statIconAssets = Object.fromEntries(
+  [
+    ["total", "agent-total.png"],
+    ["active", "agent-active.png"],
+    ["conversations", "agent-conversations.png"],
+    ["calls", "agent-calls.png"],
+    ["users", "agent-users.png"],
+  ].map(([key, fileName]) => {
+    const filePath = path.join(statIconDir, fileName);
+    return [
+      key,
+      fs.existsSync(filePath)
+        ? `data:image/png;base64,${fs.readFileSync(filePath).toString("base64")}`
+        : "",
+    ];
+  }),
+);
 
 const navItems = [
   ["域名教程", "domain-tutorial.md", "01"],
@@ -35,7 +62,44 @@ fs.mkdirSync(outputDir, { recursive: true });
 const html = renderHtml({ docs, navItems });
 fs.writeFileSync(outputPath, html, "utf8");
 fs.writeFileSync(indexOutputPath, html, "utf8");
+syncAdminOutputs();
 console.log(outputPath);
+
+function syncAdminOutputs() {
+  if (fs.existsSync(adminDistDir)) {
+    fs.rmSync(adminOutputDir, { recursive: true, force: true });
+    copyDir(adminDistDir, adminOutputDir);
+  }
+  fs.writeFileSync(path.join(outputDir, "login.html"), renderPortalPage("登录后台", "./admin/index.html#/login"), "utf8");
+  fs.writeFileSync(path.join(outputDir, "admin.html"), renderPortalPage("后台管理", "./admin/index.html#/dashboard"), "utf8");
+}
+
+function copyDir(source, target) {
+  fs.mkdirSync(target, { recursive: true });
+  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+    const sourcePath = path.join(source, entry.name);
+    const targetPath = path.join(target, entry.name);
+    if (entry.isDirectory()) copyDir(sourcePath, targetPath);
+    else if (entry.isFile()) fs.copyFileSync(sourcePath, targetPath);
+  }
+}
+
+function renderPortalPage(title, target) {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="refresh" content="0; url=${target}" />
+  <title>${title} - Clink AI</title>
+  <style>html,body{margin:0;height:100%;display:grid;place-items:center;background:#f5f9ff;color:#162033;font-family:-apple-system,BlinkMacSystemFont,"Noto Sans SC","PingFang SC",sans-serif}a{color:#146fc2;font-weight:800}</style>
+</head>
+<body>
+  <a href="${target}">进入${title}</a>
+  <script>location.replace("${target}");</script>
+</body>
+</html>`;
+}
 
 function readMarkdownFiles(dir) {
   return fs
@@ -55,11 +119,20 @@ function renderHtml({ docs, navItems }) {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AI-Terminal-KB - 1 Person + AI = 1 Team</title>
+  <title>Clink AI - 1 Person + AI = 1 Team</title>
   <meta name="description" content="终端风 AI 个人知识库，Markdown 内容系统与大模型检索入口。" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%23075ee6'/%3E%3Cpath d='M9 17h14M16 9v14' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E" />
+  <script>
+    try {
+      var autoLaunch = new URLSearchParams(location.search).get("launch") === "1";
+      var hasToken = document.cookie.split(";").some(function(item) { return item.trim().startsWith("Admin-Token="); }) || localStorage.getItem("Admin-Token");
+      if (autoLaunch && hasToken) document.documentElement.classList.add("auto-launching");
+    } catch (error) {}
+  </script>
   <style>${css()}</style>
   <style>${interactionCss()}</style>
   <style>${productThemeCss()}</style>
+  <style>${antdCss}</style>
 </head>
 <body>
   <div class="transition-overlay" id="transitionOverlay"></div>
@@ -102,22 +175,48 @@ function renderHtml({ docs, navItems }) {
         <span>Press Enter to Launch</span>
         <b>↓</b>
       </button>
+      <div class="hero-auth-actions" id="heroAuthActions" hidden>
+        <button type="button" id="heroLoginBtn">登录</button>
+        <button type="button" id="heroRegisterBtn">注册</button>
+      </div>
+      <div class="register-modal" id="registerModal" hidden>
+        <form class="register-card" id="registerForm">
+          <button type="button" class="register-close" id="registerCloseBtn" aria-label="关闭">×</button>
+          <h2>注册账号</h2>
+          <p>提交后会发送到后台，等待管理员同意或拒绝。</p>
+          <label>姓名<input id="registerName" required placeholder="请输入姓名" /></label>
+          <label>账号<input id="registerAccount" required placeholder="请输入登录账号" /></label>
+          <label>密码<input id="registerPassword" required type="password" placeholder="请输入登录密码" /></label>
+          <label>邮箱<input id="registerEmail" required type="email" placeholder="请输入邮箱" /></label>
+          <label>申请说明<textarea id="registerMessage" placeholder="补充说明，可选"></textarea></label>
+          <button class="register-submit" type="submit">提交申请</button>
+          <div class="register-feedback" id="registerFeedback" role="status"></div>
+        </form>
+      </div>
     </section>
 
     <section class="site-shell" id="os">
       <header class="topbar">
-        <button data-window="win-launchpad">esther OS</button>
+        <button data-window="win-launchpad">Clink AI</button>
         <button data-command="cat about.md">About</button>
         <button data-command="cat life-system.md">Values</button>
         <button data-command="cat ai-partner.md">Now</button>
-        <time id="clock">--:--</time>
+        <button id="homeCanvasBtn" type="button">无限画板</button>
+        <a class="topbar-admin-link" data-guest-only href="./login.html" target="_blank" rel="noopener">登录</a>
+        <button class="topbar-admin-link topbar-logout-hidden" data-logged-in-only id="topbarLogoutBtn" type="button">退出登录</button>
+        <a class="topbar-admin-link primary topbar-admin-bridge" id="topbarAdminBtn" data-admin-only href="./admin.html" target="_blank" rel="noopener" aria-hidden="true" tabindex="-1">后台</a>
+        <div class="topbar-user-cluster">
+          <time id="clock">--:--</time>
+          <div class="antd-user-area" id="antdUserArea"></div>
+        </div>
       </header>
+      <div id="antdAgentChat"></div>
 
       <div class="star-marquee" aria-hidden="true">
         <span>✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦</span>
       </div>
 
-      <section class="os-board">
+      <section class="os-board" id="osBoard">
         <div class="portrait-card">
           <div class="portrait-art">
             <span>AI</span>
@@ -125,19 +224,152 @@ function renderHtml({ docs, navItems }) {
           </div>
           <p>1 person + AI = 1 team</p>
         </div>
-        <div class="desktop-surface" id="desktopSurface">
-          <div class="desktop-tools" id="desktopTools">
-            <button id="newFileBtn" title="新建文件">+</button>
-            <input id="desktopSearch" placeholder="Search files" />
+        <aside class="desktop-dashboard-left" aria-label="智能体任务看板">
+          <div class="agent-dashboard-title">
+            <span>智能体工作台</span>
+            <small>高效规划 · 智能协同 · 知识驱动</small>
+          </div>
+          <div class="agent-stat-grid">
+            <article data-tone="blue">
+              <small>智能体总数</small>
+              <b id="statAgentCount">0</b>
+              <span>较昨日 <em>+3</em></span>
+              <i aria-hidden="true"><span id="statAgentIcon"></span></i>
+            </article>
+            <article data-tone="green">
+              <small>活跃智能体</small>
+              <b id="statActiveAgentCount">0</b>
+              <span>较昨日 <em>+5</em></span>
+              <i aria-hidden="true"><span id="statActiveAgentIcon"></span></i>
+            </article>
+            <article data-tone="cyan">
+              <small>今日对话数</small>
+              <b id="statConversationCount">0</b>
+              <span>较昨日 <em>+18.6%</em></span>
+              <i aria-hidden="true"><span id="statConversationIcon"></span></i>
+            </article>
+            <article data-tone="orange">
+              <small>今日调用量</small>
+              <b id="statApiRequestCount">0</b>
+              <span>较昨日 <em>+21.3%</em></span>
+              <i aria-hidden="true"><span id="statApiCallIcon"></span></i>
+            </article>
+            <article data-tone="purple">
+              <small>今日用户数</small>
+              <b id="statUserCount">0</b>
+              <span>较昨日 <em>+9.4%</em></span>
+              <i aria-hidden="true"><span id="statUserIcon"></span></i>
+            </article>
+          </div>
+          <div class="agent-board-panel" id="agentBoardPanel">
+            <div class="agent-panel-head">
+              <b>智能体分类</b>
+              <button class="agent-category-collapse" id="agentCategoryCollapseBtn" type="button" aria-expanded="true" title="收起智能体分类">« 收起</button>
+            </div>
+            <div class="agent-board-list" id="agentBoardList"></div>
+            <div class="agent-category-actions" id="antdAgentCategoryActions"></div>
+          </div>
+          <div class="agent-lower-panels">
+            <section class="agent-resource-panel" id="agentResourcePanel" aria-label="资源使用情况">
+              <div class="agent-panel-head">
+                <b>资源使用情况</b>
+                <span>实时</span>
+              </div>
+              <div class="agent-resource-grid">
+                <div>
+                  <small>Token 使用量</small>
+                  <strong id="resourceTokenValue">0 <em>/ 实际累计</em></strong>
+                  <span class="agent-progress"><i id="resourceTokenProgress" style="width:0%"></i></span>
+                  <b id="resourceTokenPercent">0%</b>
+                </div>
+                <div>
+                  <small>模型调用次数</small>
+                  <strong id="resourceModelValue">0 <em>/ 实际累计</em></strong>
+                  <span class="agent-progress"><i id="resourceModelProgress" style="width:0%"></i></span>
+                  <b id="resourceModelPercent">0%</b>
+                </div>
+              </div>
+            </section>
+            <section class="agent-announcement-panel" aria-label="最新公告">
+              <div class="agent-panel-head">
+                <b>最新公告</b>
+                <span id="announcementCount">0 条</span>
+              </div>
+              <div id="announcementList"></div>
+            </section>
+          </div>
+        </aside>
+        <div class="desktop-tools" id="desktopTools">
+          <div class="desktop-search-slot">
+            <div class="agent-search-control" id="antdAgentSearch"></div>
+            <span id="desktopSearchStatus" role="status" aria-live="polite"></span>
+          </div>
+          <div class="desktop-tool-actions">
+            <div class="antd-topbar-settings" id="antdTopbarSettings"></div>
+            <button id="newFileBtn" title="新建智能体">＋ 新建智能体</button>
             <button id="deleteFileBtn" title="删除文件">×</button>
           </div>
+        </div>
+        <div class="desktop-surface" id="desktopSurface">
+          <div class="agent-list-toolbar" aria-label="智能体筛选与视图">
+            <div id="antdAgentFilters"></div>
+            <div class="agent-view-switch" id="antdAgentViewSwitch" aria-label="视图切换"></div>
+          </div>
+          <div class="agent-model-availability" id="antdModelAvailabilityNotice"></div>
           <div class="selection-actions" id="selectionActions">
             <span id="selectionCount">已选 0</span>
             <button id="selectionDeleteBtn" title="删除选中文件">× 删除</button>
           </div>
           <div class="app-grid" id="appGrid"></div>
         </div>
+        <aside class="desktop-dashboard-right" aria-label="智能详情">
+          <div class="agent-detail-card agent-detail-expanded">
+            <div class="agent-panel-head">
+              <b class="agent-detail-heading">智能详情</b>
+              <span>Agent Insight</span>
+            </div>
+            <small class="agent-record-id" id="agentInsightCode">AGT-2026-001</small>
+            <div class="agent-detail-title-row">
+              <strong id="agentInsightTitle">知识库总控智能体</strong>
+              <span class="agent-priority" id="agentInsightPriority">高优先级</span>
+            </div>
+            <p id="agentInsightDesc">统一管理桌面项目、知识库、模型与工具调用，打开任意卡片即可进入对应智能体对话窗口。</p>
+            <dl class="agent-insight-fields">
+              <div><dt>负责人</dt><dd id="agentInsightOwner">当前登录成员</dd></div>
+              <div><dt>更新时间</dt><dd id="agentInsightDeadline">2026-08-18 18:00</dd></div>
+              <div><dt>智能体分类</dt><dd><div id="antdAgentCategorySelect"></div></dd></div>
+              <div><dt>默认模型</dt><dd><div class="antd-agent-detail-select" id="antdAgentModelSelect"></div></dd></div>
+              <div><dt>知识库</dt><dd><div class="antd-agent-detail-select" id="antdAgentKnowledgeSelect"></div></dd></div>
+              <div><dt>当前状态</dt><dd class="agent-status" id="agentInsightStatus">运行中</dd></div>
+            </dl>
+            <div class="agent-insight-tags">
+              <b>该智能体挂载可使用的功能或 Skills</b>
+              <div id="agentInsightTags" role="group" aria-label="该智能体挂载可使用的功能或 Skills"></div>
+            </div>
+            <div class="agent-inline-advice">
+              <b>AI 助手建议</b>
+              <ul id="agentInsightAdvice">
+                <li>建议绑定常用知识库并维护明确的工具集。</li>
+                <li>检测到可复用流程，可保存为快捷指令。</li>
+              </ul>
+              <button type="button" id="agentAdviceOpenBtn">打开首个对话</button>
+            </div>
+            <div class="agent-insight-actions" id="antdAgentInsightActions"></div>
+          </div>
+        </aside>
       </section>
+
+      <footer class="desktop-footer" aria-label="项目底部信息">
+        <div class="desktop-footer-left">
+          <span>© 2026 Clink AI. All rights reserved.</span>
+          <b>版本 v2.1.0</b>
+        </div>
+        <nav class="desktop-footer-links" aria-label="帮助入口">
+          <a href="javascript:void(0)" role="button">隐私政策</a>
+          <a href="javascript:void(0)" role="button">服务条款</a>
+          <button id="desktopHelpDocsBtn" type="button">帮助文档</button>
+        </nav>
+      </footer>
 
       <section class="work-strip" id="works">
         <p>Work With Me ✦</p>
@@ -195,7 +427,7 @@ function renderHtml({ docs, navItems }) {
       </section>
 
       <footer class="site-footer">
-        <p>© 2026 AI-Terminal-KB · Built with AI & attitude</p>
+        <p>© 2026 Clink AI · Built with AI & attitude</p>
         <button id="backToTopLink">↑ 回到开始 · Back to Start</button>
       </footer>
 
@@ -234,7 +466,6 @@ function renderHtml({ docs, navItems }) {
       <p>这里是作品集 / 知识库入口页。参考站的这个 tab 用来集中展示个人项目、内容系统、AI 协作工作流。</p>
       <div class="works-actions">
         <button id="worksAddFileBtn" class="works-add-file">添加文件</button>
-        <button id="worksCanvasRecordsBtn" class="works-canvas-records">无限画板</button>
       </div>
       <div id="worksFilesGrid" class="works-files-grid"></div>
       <div class="works-grid">
@@ -255,7 +486,7 @@ function renderHtml({ docs, navItems }) {
   </main>
 
   <template id="win-launchpad">
-    <div class="os-window" data-title="esther OS">
+    <div class="os-window" data-title="Clink AI">
       <div class="os-body" id="launchpadBody"></div>
     </div>
   </template>
@@ -294,8 +525,10 @@ function renderHtml({ docs, navItems }) {
   <script>
     window.__DOCS__ = ${JSON.stringify(docs)};
     window.__NAV_ITEMS__ = ${JSON.stringify(navItems)};
+    window.__STAT_ICON_ASSETS__ = ${JSON.stringify(statIconAssets)};
   </script>
   <script>${clientJs()}</script>
+  <script>${antdJs}</script>
 </body>
 </html>`;
 }
@@ -307,6 +540,7 @@ function css() {
 
 function interactionCss() {
   return `
+.auto-launching body{opacity:0;background:#bfe2ff}
 .intro-lines{display:block;text-align:left;height:auto;place-content:initial}
 .intro-line{opacity:0;transform:translateY(6px);white-space:pre-wrap}
 .intro-line.visible{animation:lineReveal .35s ease forwards}
@@ -316,6 +550,22 @@ function interactionCss() {
 .hero-cta.hidden{opacity:0}
 .hero-cta span{display:block;font-size:clamp(19px,3vw,32px)}
 .hero-cta b{display:block;font-size:28px;animation:bounce 1.4s infinite}
+.hero-auth-actions{position:absolute;left:50%;bottom:8.5vh;z-index:8;display:flex;gap:14px;transform:translateX(-50%) translateY(16px);opacity:0;pointer-events:none;transition:.35s}
+.hero-auth-actions[hidden],.register-modal[hidden]{display:none!important}
+.file-thumb{display:none}
+.hero-auth-actions.visible{opacity:1;pointer-events:auto;transform:translateX(-50%)}
+.hero-auth-actions button{min-width:112px;border:1px solid rgba(255,255,255,.72);border-radius:999px;padding:13px 24px;background:rgba(255,255,255,.78);color:#1f2d3d;font-weight:900;box-shadow:0 14px 34px rgba(37,56,82,.16);backdrop-filter:blur(16px)}
+.hero-auth-actions button:first-child{background:#2b83d3;color:#fff;border-color:#2b83d3}
+.register-modal{position:fixed;inset:0;z-index:120;display:grid;place-items:center;padding:22px;background:rgba(19,34,54,.34);backdrop-filter:blur(10px)}
+.register-card{position:relative;width:min(520px,94vw);border:1px solid rgba(255,255,255,.86);border-radius:26px;background:rgba(248,252,255,.94);box-shadow:0 24px 70px rgba(37,56,82,.28);padding:28px;color:#1f2d3d}
+.register-card h2{margin:0 0 8px;font-size:24px}
+.register-card p{margin:0 0 18px;color:#60748d;line-height:1.6}
+.register-card label{display:block;margin:13px 0 0;font-weight:900}
+.register-card input,.register-card textarea{display:block;width:100%;margin-top:8px;border:1px solid #d6e1ec;border-radius:16px;background:#fff;padding:12px 14px;color:#1f2d3d;outline:0}
+.register-card textarea{min-height:84px;resize:vertical}
+.register-close{position:absolute;right:16px;top:14px;border:0;background:transparent;color:#60748d;font-size:24px}
+.register-submit{width:100%;margin-top:18px;border:0;border-radius:999px;background:#2b83d3;color:#fff;padding:13px 16px;font-weight:900}
+.register-feedback{min-height:22px;margin-top:12px;color:#2b83d3;font-weight:800}
 .mini-terminal>*{transition:opacity .32s ease}
 .site-footer{display:none}
 .exit-section{min-height:100vh;display:grid;place-items:center;padding:80px 0 120px}
@@ -449,12 +699,14 @@ body.desktop-mode .app-card:hover,body.desktop-mode .app-card.selected{transform
 body.desktop-mode .app-card.selected{background:rgba(23,79,147,.28)!important;border-radius:10px}
 body.desktop-mode .app-card:before{content:"";width:48px;height:48px;border-radius:9px;background:#f8f8fb;box-shadow:0 2px 7px rgba(0,0,0,.14)}
 body.desktop-mode .app-card.selected:before{background:#174f93;box-shadow:0 0 0 3px rgba(255,255,255,.72),0 8px 18px rgba(0,0,0,.22)}
-body.desktop-mode .app-card.selected strong{color:white;background:rgba(23,79,147,.82);border-radius:6px;padding:2px 4px;text-shadow:none}
+body.desktop-mode .app-card.selected strong{color:white;background:rgba(23,79,147,.82);border-radius:6px;padding:0 4px;text-shadow:none}
 body.desktop-mode .app-card[data-window]:before{background:linear-gradient(#ffe870,#f7cf45);border-radius:10px}
+body.desktop-mode .app-card[data-folder]:before{background:linear-gradient(180deg,#ffe477,#f2c947);border-radius:10px}
 body.desktop-mode .app-card.selected[data-window]:before{background:linear-gradient(#174f93,#236fbd)}
+body.desktop-mode .app-card.selected[data-folder]:before{background:linear-gradient(#174f93,#236fbd)}
 body.desktop-mode .app-card[data-command]:after{content:attr(data-ext);position:absolute;top:31px;left:25px;min-width:25px;padding:1px 3px;border-radius:2px;background:#2b7fd8;color:white;font:700 8px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace}
 body.desktop-mode .app-card small{display:none}
-body.desktop-mode .app-card strong{display:block;max-width:72px;color:rgba(255,255,255,.85);font:600 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;text-shadow:0 1px 2px rgba(0,0,0,.25);word-break:break-word}
+body.desktop-mode .app-card strong{display:-webkit-box;max-width:72px;max-height:2.4em;color:rgba(255,255,255,.85);font:600 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;text-shadow:0 1px 2px rgba(0,0,0,.25);word-break:break-word;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 body.desktop-mode .desktop-tools{position:absolute;left:18px;top:48px;z-index:80;display:flex;align-items:center;gap:8px;padding:6px;border:1px solid rgba(255,255,255,.22);border-radius:999px;background:rgba(255,255,255,.14);backdrop-filter:blur(14px)}
 body.desktop-mode .desktop-tools button{width:30px;height:30px;border:0;border-radius:50%;background:rgba(255,255,255,.82);color:#1a1a2e;font-weight:900}
 body.desktop-mode .desktop-tools input{width:150px;height:30px;border:0;border-radius:999px;background:rgba(255,255,255,.85);padding:0 12px;color:#1a1a2e;outline:0}
@@ -472,8 +724,20 @@ body.desktop-mode .link-import-row,.works-page .link-import-row{display:grid;gri
 body.desktop-mode .link-import-row input,.works-page .link-import-row input{width:100%;height:36px;border:1px solid #1a1a2e;border-radius:8px;padding:0 10px}
 body.desktop-mode .link-import-row button,.works-page .link-import-row button{border:1px solid #1a1a2e;border-radius:8px;background:#f4d758;padding:0 12px;font-weight:900}
 body.desktop-mode .link-import-status,.works-page .link-import-status{display:block;margin-top:8px;color:#626272;font-size:12px;line-height:1.5}
+body.desktop-mode .os-body .create-mode,.works-page .os-body .create-mode{display:grid!important;grid-template-columns:1fr 1fr;gap:10px;margin:0 0 18px!important;padding:8px!important;border:1px solid #d8e2ee!important;border-radius:999px!important;background:#f6fbff!important}
+body.desktop-mode .os-body .create-mode-btn,.works-page .os-body .create-mode-btn{display:flex!important;align-items:center!important;justify-content:center!important;width:auto!important;height:52px!important;margin:0!important;border:0!important;border-radius:999px!important;background:#fff!important;color:#1f2d3d!important;font-weight:900!important;font-size:18px!important;line-height:1!important;text-align:center!important;box-shadow:inset 0 0 0 1px #d8e2ee!important;transition:background .18s ease,color .18s ease,box-shadow .18s ease!important}
+body.desktop-mode .os-body .create-mode-btn:hover,.works-page .os-body .create-mode-btn:hover{background:#e8f4ff!important;color:#0d5fa9!important}
+body.desktop-mode .os-body .create-mode-btn.active,.works-page .os-body .create-mode-btn.active{background:#155b96!important;color:white!important;box-shadow:0 8px 18px rgba(21,91,150,.2)!important}
+body.desktop-mode .os-body.folder-create-mode .file-only,.works-page .os-body.folder-create-mode .file-only{display:none!important}
+body.desktop-mode .desktop-folder-body{display:grid;gap:10px;min-width:320px}
+body.desktop-mode .desktop-folder-file{display:block;width:100%;border:1px solid #d6e1ec;border-radius:12px;background:#fff;padding:12px;text-align:left}
+body.desktop-mode .desktop-folder-file:hover{border-color:#3c91e6;box-shadow:0 8px 20px rgba(60,145,230,.12)}
+body.desktop-mode .desktop-folder-file b{display:block;color:#1f2d3d;font-weight:900}
+body.desktop-mode .desktop-folder-file small{display:block;margin-top:5px;color:#6b7c93}
+body.desktop-mode .desktop-folder-empty{padding:18px;border:1px dashed #b7c9e3;border-radius:12px;color:#6b7c93;background:#f8fcff}
 body.desktop-mode .app-card.dragging{opacity:.72;z-index:60}
 body.desktop-mode .app-card.realtime-drag{transition:none;will-change:transform}
+body.desktop-mode .app-card.folder-drop-target{background:rgba(255,255,255,.28)!important;border-radius:12px;box-shadow:0 0 0 3px rgba(255,255,255,.82)}
 body.desktop-mode .selection-box{position:absolute;left:0;top:0;z-index:55;border:1px solid rgba(255,255,255,.9);background:rgba(23,79,147,.24);box-shadow:0 0 0 1px rgba(255,255,255,.28) inset;pointer-events:none;will-change:transform,width,height}
 body.desktop-mode .desktop-sticker{position:absolute;left:70%;bottom:46px;width:min(190px,17vw);height:auto;z-index:3;transform:translateX(-50%)}
 body.desktop-mode .pill-nav{bottom:24px;background:rgba(255,255,255,.82)}
@@ -528,6 +792,12 @@ body{background:var(--ui-bg);color:var(--ui-ink)}
 .topbar{min-height:58px;padding:0 14px;border:1px solid rgba(255,255,255,.65);border-radius:999px;background:rgba(248,252,255,.72);box-shadow:var(--ui-shadow-soft);backdrop-filter:blur(20px)}
 .topbar button{border-radius:999px;padding:9px 13px;color:#4a596d}
 .topbar button:hover{background:#fff;text-decoration:none;color:var(--ui-blue)}
+.topbar-admin-link{display:inline-flex;align-items:center;justify-content:center;min-height:34px;border:1px solid var(--ui-line);border-radius:999px;padding:0 14px;background:rgba(255,255,255,.7);color:#4a596d;text-decoration:none;font-size:14px;font-weight:800;transition:.18s}
+.topbar-admin-link:hover{background:#fff;color:var(--ui-blue);transform:translateY(-1px)}
+.topbar-admin-link.primary{background:linear-gradient(180deg,var(--ui-blue-2),#0d5fa9);border-color:transparent;color:#fff;box-shadow:0 10px 24px rgba(13,95,169,.18)}
+.topbar-admin-link.primary:hover{background:var(--ui-blue);color:#fff}
+.topbar-admin-bridge{display:none!important}
+.admin-only-hidden,.guest-only-hidden,.logged-in-only-hidden{display:none!important}
 .star-marquee{color:#8ba1b8;opacity:.7}
 .os-board{gap:22px}
 .portrait-card,.readme-panel,.chat-panel,.work-strip,.terminal-window,.system-canvas-panel,.os-window,.works-file-card,.works-category,.canvas-record-card,.canvas-record-empty,.works-canvas-card,.works-canvas-palette,.works-canvas-template-modal,.works-canvas-layer-modal{
@@ -579,7 +849,7 @@ body{background:var(--ui-bg);color:var(--ui-ink)}
 .os-window{overflow:hidden}
 .os-window-bar{background:rgba(238,246,255,.92);border-bottom:1px solid var(--ui-line);height:42px}
 .os-window-bar span{color:#526177;font-weight:800}
-.os-body{background:rgba(248,252,255,.88)}
+.os-body{background:rgba(248,252,255,.88);overscroll-behavior:contain}
 .os-body input,.os-body textarea,.os-body select,.link-import-row input,.works-canvas-palette input,.works-canvas-palette textarea,.works-canvas-palette select,.works-canvas-layer-modal input{
   border:1px solid rgba(74,105,140,.18)!important;
   border-radius:14px!important;
@@ -622,23 +892,422 @@ body{background:var(--ui-bg);color:var(--ui-ink)}
 .works-canvas-card.sticky,.works-canvas-card.quote,.works-canvas-card.link,.works-canvas-card.image{background:#fff!important;border-color:rgba(74,105,140,.16)!important}
 .works-link-port{background:var(--ui-blue-2)}
 .works-canvas-links path{stroke:#70aee8}
-body.desktop-mode{background:#eaf6ff}
-body.desktop-mode #page-home,body.desktop-mode .site-shell{background:linear-gradient(90deg,#cfeaff 0%,#bfe2ff 34%,#9ed1ff 68%,#7ec2ff 100%);color:white}
-body.desktop-mode .site-shell:before{opacity:.72;background:linear-gradient(90deg,rgba(255,255,255,.48) 0%,rgba(255,255,255,.18) 42%,rgba(41,150,238,.1) 100%),radial-gradient(circle at 16% 18%,rgba(255,255,255,.34) 0 1px,transparent 1.7px),radial-gradient(circle at 72% 26%,rgba(255,255,255,.28) 0 1px,transparent 1.6px);background-size:100% 100%,34px 34px,52px 52px;background-position:0 0,6px 10px,18px 22px;filter:saturate(1.03)}
-body.desktop-mode .site-shell:after{content:"";position:absolute;inset:0;pointer-events:none;z-index:1;background-image:radial-gradient(circle,rgba(255,255,255,.34) 0 1px,transparent 1.7px),radial-gradient(circle,rgba(255,255,255,.2) 0 1px,transparent 1.6px);background-size:44px 44px,71px 71px;background-position:9px 13px,28px 25px;opacity:.38}
-body.desktop-mode .topbar{background:rgba(255,255,255,.08);border:0;box-shadow:none}
-body.desktop-mode .topbar button,body.desktop-mode .topbar time{color:rgba(255,255,255,.66)}
-body.desktop-mode .topbar button:first-child{color:#fff}
+body.desktop-mode{background:#f5fbff}
+body.desktop-mode #page-home,body.desktop-mode .site-shell{background:linear-gradient(180deg,#f9fdff 0%,#edf7ff 40%,#dff1ff 100%);color:#0b1f3a}
+body.desktop-mode .site-shell:before{opacity:.78;background:radial-gradient(circle at 18% 0%,rgba(255,255,255,.9),transparent 34%),radial-gradient(circle at 82% 22%,rgba(97,174,244,.22),transparent 30%),linear-gradient(90deg,rgba(255,255,255,.66),rgba(213,236,255,.34));filter:saturate(1.02)}
+body.desktop-mode .site-shell:after{content:"";position:absolute;inset:0;pointer-events:none;z-index:1;background-image:radial-gradient(circle,rgba(70,151,224,.12) 0 1px,transparent 1.7px);background-size:32px 32px;background-position:12px 12px;opacity:.5}
+body.desktop-mode .topbar{height:47px;min-height:47px;padding:0 25px;background:rgba(255,255,255,.84);border-bottom:1px solid #cfe0f3!important;border-radius:0!important;box-shadow:0 7px 24px rgba(39,86,135,.06);backdrop-filter:blur(18px)}
+body.desktop-mode .topbar button,body.desktop-mode .topbar time{height:28px;color:#122548;text-shadow:none;font-size:13px}
+body.desktop-mode .topbar button:first-child{display:inline-flex;align-items:center;gap:8px;color:#112344;font-style:normal;font-size:16px;font-weight:950}
+body.desktop-mode .topbar button:first-child:before{content:"";width:20px;height:20px;border-radius:50%;background:conic-gradient(from 20deg,#0066dc,#1e8dff,#004bb8,#0066dc);box-shadow:inset 0 0 0 2px rgba(255,255,255,.8)}
+body.desktop-mode .topbar button:first-child:after{content:"";display:none}
+body.desktop-mode .topbar-admin-link{display:inline-flex;align-items:center;height:28px;border:1px solid #d6e3f2!important;border-radius:999px!important;background:#f7fbff!important;color:#24405f!important;padding:0 14px!important;font-size:13px;font-weight:800;text-decoration:none}
+body.desktop-mode .topbar-admin-link.primary{background:#075ee6!important;color:#fff!important;border-color:#075ee6!important}
+body.desktop-mode .topbar button:hover,body.desktop-mode .topbar-admin-link:hover,body.desktop-mode .topbar-admin-link.primary:hover{background:#fff;color:#071b35;text-shadow:none;text-decoration:none}
+body.desktop-mode .topbar time{position:relative;margin-left:auto;padding-left:62px;color:#263f5d;font-weight:800}
+body.desktop-mode .topbar time:before{content:"";position:absolute;left:5px;top:5px;width:17px;height:17px;border:1.8px solid #315071;border-radius:50%;box-shadow:10px -5px 0 -8px #f0445d}
+body.desktop-mode .topbar time:after{content:"";position:absolute;left:36px;top:2px;width:24px;height:24px;border-radius:50%;background:linear-gradient(180deg,#78b9ff,#1977e6);box-shadow:inset 0 0 0 5px rgba(255,255,255,.55)}
 body.desktop-mode .desktop-tools,body.desktop-mode .selection-actions{background:rgba(248,252,255,.82);border:1px solid rgba(255,255,255,.5);box-shadow:var(--ui-shadow-soft)}
 body.desktop-mode .desktop-tools button{background:#fff;color:var(--ui-blue)}
-body.desktop-mode .app-card{background:transparent!important;box-shadow:none!important}
+body.desktop-mode .app-card{grid-template-rows:58px 1fr;background:transparent!important;box-shadow:none!important}
+body.desktop-mode .app-card .file-thumb{display:grid}
 body.desktop-mode .app-card:before{border-radius:13px;background:#f8fbff;box-shadow:0 7px 18px rgba(18,47,82,.18)}
 body.desktop-mode .app-card[data-window]:before{background:linear-gradient(180deg,#ffe477,#f2c947)}
+body.desktop-mode .app-card[data-folder]:before{background:linear-gradient(180deg,#ffe477,#f2c947);border-radius:13px}
+body.desktop-mode .app-card[data-command]:before,body.desktop-mode .app-card[data-url]:before{display:none}
 body.desktop-mode .app-card.selected{background:rgba(255,255,255,.2)!important}
 body.desktop-mode .app-card.selected:before{background:linear-gradient(180deg,var(--ui-blue-2),var(--ui-blue));box-shadow:0 0 0 3px rgba(255,255,255,.78),0 10px 22px rgba(18,47,82,.26)}
 body.desktop-mode .app-card[data-command]:after{background:var(--ui-blue)}
+body.desktop-mode .app-card[data-command]:after,body.desktop-mode .app-card[data-url]:after{display:none}
+body.desktop-mode .file-thumb{position:relative;width:56px;height:56px;place-items:center;border-radius:18px;background:linear-gradient(145deg,rgba(255,255,255,.82),rgba(235,247,255,.52));box-shadow:inset 0 0 0 1px rgba(255,255,255,.72),0 10px 24px rgba(18,47,82,.18)}
+body.desktop-mode .file-thumb:before{content:"";position:absolute;left:13px;top:8px;width:32px;height:39px;border-radius:8px 13px 9px 9px;background:linear-gradient(160deg,var(--file-a),var(--file-b));box-shadow:0 9px 15px var(--file-shadow)}
+body.desktop-mode .file-thumb:after{content:"";position:absolute;right:11px;top:8px;width:13px;height:13px;border-radius:0 12px 0 4px;background:linear-gradient(135deg,rgba(255,255,255,.72),rgba(255,255,255,.2));box-shadow:-2px 2px 5px rgba(18,47,82,.08)}
+body.desktop-mode .file-thumb b{position:relative;z-index:2;margin-top:9px;min-width:30px;border-radius:6px;padding:3px 4px;background:rgba(255,255,255,.72);color:var(--file-text);font:900 10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.2px;box-shadow:0 3px 7px rgba(18,47,82,.12)}
+body.desktop-mode .file-thumb i{position:absolute;z-index:2;left:17px;top:21px;width:20px;height:3px;border-radius:999px;background:rgba(255,255,255,.64);box-shadow:0 7px 0 rgba(255,255,255,.54)}
+body.desktop-mode .file-thumb em{position:absolute;z-index:2;left:18px;top:14px;width:11px;height:11px;border-radius:50%;background:rgba(255,255,255,.68);opacity:.9}
+body.desktop-mode .app-card[data-ext=".md"]{--file-a:#42b9ff;--file-b:#0d62ad;--file-text:#0d4d86;--file-shadow:rgba(13,77,134,.24)}
+body.desktop-mode .app-card[data-ext=".txt"]{--file-a:#a8b9ca;--file-b:#60748d;--file-text:#44566c;--file-shadow:rgba(68,86,108,.24)}
+body.desktop-mode .app-card[data-ext=".json"]{--file-a:#b66cff;--file-b:#5c42d8;--file-text:#5135b9;--file-shadow:rgba(81,53,185,.24)}
+body.desktop-mode .app-card[data-ext=".csv"]{--file-a:#63d98b;--file-b:#168f56;--file-text:#127047;--file-shadow:rgba(18,112,71,.24)}
+body.desktop-mode .app-card[data-ext=".html"]{--file-a:#ffb15f;--file-b:#f05c28;--file-text:#b6421f;--file-shadow:rgba(180,66,31,.24)}
+body.desktop-mode .app-card[data-ext=".pdf"]{--file-a:#ff8a7e;--file-b:#e23835;--file-text:#ba2525;--file-shadow:rgba(186,37,37,.24)}
+body.desktop-mode .app-card:not([data-ext=".md"]):not([data-ext=".txt"]):not([data-ext=".json"]):not([data-ext=".csv"]):not([data-ext=".html"]):not([data-ext=".pdf"]){--file-a:#8bc9ff;--file-b:#2b83d3;--file-text:#0d4d86;--file-shadow:rgba(13,77,134,.24)}
+body.desktop-mode .app-card.agent-card{display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start;width:150px;height:168px;border:1px solid #cfe0f3;border-radius:10px!important;padding:12px 10px 46px;background:rgba(255,255,255,.88)!important;color:#162236;text-align:left;box-shadow:0 8px 24px rgba(31,89,153,.08)!important;backdrop-filter:blur(18px);overflow:hidden;cursor:pointer}
+body.desktop-mode .app-card.agent-card:hover,body.desktop-mode .app-card.agent-card.selected{transform:translateY(-1px);box-shadow:0 12px 28px rgba(31,89,153,.14)!important}
+body.desktop-mode .app-card.agent-card.selected{background:rgba(255,255,255,.96)!important;border-color:#0b67e9;box-shadow:0 0 0 2px rgba(11,103,233,.2),0 12px 28px rgba(31,89,153,.14)!important}
+body.desktop-mode .app-card.agent-card:before,body.desktop-mode .app-card.agent-card:after{display:none!important}
+body.desktop-mode .agent-card-head{display:grid;grid-template-columns:36px 1fr;gap:9px;align-items:center;min-width:0;min-height:38px}
+body.desktop-mode .agent-avatar{display:grid;place-items:center;width:36px;height:36px;border-radius:12px;background:linear-gradient(160deg,#e5f2ff,#7ec1ff);color:#0d5fa9;font:900 14px/1 ui-monospace,SFMono-Regular,Menlo,monospace;box-shadow:inset 0 0 0 1px rgba(255,255,255,.8),0 8px 18px rgba(13,95,169,.12)}
+body.desktop-mode .agent-card-title{min-width:0}
+body.desktop-mode .app-card.agent-card strong{display:-webkit-box;max-width:none;max-height:2.5em;color:#162236;font:950 12px/1.25 -apple-system,BlinkMacSystemFont,"Noto Sans SC","PingFang SC",sans-serif;text-shadow:none;letter-spacing:0;word-break:break-word;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+body.desktop-mode .app-card.agent-card small{display:block;margin:2px 0 0;color:#5e7189;font:800 9px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;opacity:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+body.desktop-mode .agent-card-meta{display:grid;gap:5px;margin:9px 0 0;min-height:38px;padding-right:2px}
+body.desktop-mode .agent-meta-row{display:grid;grid-template-columns:34px minmax(0,1fr);gap:6px;align-items:center;min-width:0;color:#3d536d;font:800 9px/1.2 -apple-system,BlinkMacSystemFont,"Noto Sans SC","PingFang SC",sans-serif}
+body.desktop-mode .agent-meta-row span:first-child{color:#7890aa;font-weight:900}
+body.desktop-mode .agent-meta-row span:last-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+body.desktop-mode .agent-tool-line{position:absolute;left:10px;right:10px;bottom:43px;display:flex;gap:4px;height:18px;min-height:18px;overflow:hidden}
+body.desktop-mode .agent-tool-chip{flex:1 1 0;min-width:0;max-width:none;border-radius:6px;padding:4px 5px;background:#eaf4ff;color:#0b67e9;font:900 9px/1 -apple-system,BlinkMacSystemFont,"Noto Sans SC","PingFang SC",sans-serif;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+body.desktop-mode .agent-chat-btn{position:absolute;left:10px;right:10px;bottom:10px;height:26px;min-height:26px;margin-top:0;border:0;border-radius:6px;background:#075ee6;color:#fff;font-size:12px;font-weight:900;box-shadow:0 8px 18px rgba(7,94,230,.16);transition:.18s}
+body.desktop-mode .agent-chat-btn:hover{background:#0d4d86;transform:translateY(-1px)}
+body.desktop-mode .agent-window{width:min(640px,92vw)}
+body.desktop-mode .agent-chat-body{display:grid;gap:14px;min-width:min(560px,76vw)}
+body.desktop-mode .agent-summary{display:grid;grid-template-columns:56px 1fr;gap:12px;align-items:center;padding:14px;border:1px solid #d7e6f5;border-radius:16px;background:linear-gradient(145deg,#f8fcff,#eaf6ff)}
+body.desktop-mode .agent-summary .agent-avatar{width:56px;height:56px;border-radius:18px;font-size:21px}
+body.desktop-mode .agent-summary h3{margin:0;color:#162236;font-size:20px}
+body.desktop-mode .agent-summary p{margin:5px 0 0;color:#52677f;line-height:1.5}
+body.desktop-mode .agent-detail-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+body.desktop-mode .agent-detail-grid div{border:1px solid #dbe8f5;border-radius:13px;padding:10px;background:#fff}
+body.desktop-mode .agent-detail-grid b{display:block;color:#7890aa;font-size:11px;margin-bottom:4px}
+body.desktop-mode .agent-detail-grid span{display:block;color:#162236;font-weight:800;font-size:12px;line-height:1.4}
+body.desktop-mode .agent-detail-grid select{display:block;width:100%;height:34px;border:1px solid #d5e4f3;border-radius:10px;background:#f8fcff;color:#162236;padding:0 9px;font-size:12px;font-weight:800;outline:0}
+body.desktop-mode .agent-detail-grid select[multiple]{height:82px;padding:6px 8px}
+body.desktop-mode .agent-detail-grid select:focus{border-color:#155b96;box-shadow:0 0 0 3px rgba(21,91,150,.12)}
+body.desktop-mode .agent-chat-log{display:grid;gap:8px;max-height:220px;overflow:auto;padding:10px;border-radius:16px;background:#f7fbff;border:1px solid #dce9f6}
+body.desktop-mode .agent-bubble{max-width:88%;border-radius:14px;padding:10px 12px;color:#203248;line-height:1.55;background:#fff;box-shadow:0 6px 18px rgba(18,47,82,.07)}
+body.desktop-mode .agent-bubble.user{justify-self:end;background:#155b96;color:#fff}
+body.desktop-mode .agent-compose{display:grid;grid-template-columns:1fr auto;align-items:center;gap:8px}
+body.desktop-mode .agent-compose input{height:40px;border:1px solid #d5e4f3;border-radius:999px;padding:0 14px;outline:0}
+body.desktop-mode .agent-compose button{display:inline-flex!important;align-items:center;justify-content:center;width:auto!important;height:40px;min-width:78px;margin:0!important;border:1px solid #155b96!important;border-radius:999px;background:#155b96!important;color:#fff!important;padding:0 16px!important;font-weight:900;text-align:center!important;box-shadow:none!important;transition:background .18s ease,color .18s ease,border-color .18s ease,box-shadow .18s ease}
+body.desktop-mode .agent-compose button:hover{background:#fff!important;color:#111827!important;border-color:#d5e4f3!important;box-shadow:0 8px 18px rgba(18,47,82,.1)!important}
 body.desktop-mode .os-window{background:var(--ui-card-solid)!important;color:var(--ui-ink)}
 body.desktop-mode .pill-nav{background:rgba(255,255,255,.84)}
+.desktop-dashboard-left,.desktop-dashboard-right{display:none}
+body.desktop-mode .os-board{display:block;position:absolute;left:50%;top:var(--desktop-top,62px);width:1396px;height:var(--desktop-board-height,930px);z-index:3;overflow:visible;pointer-events:none;transform:translateX(-50%) scale(var(--desktop-scale,1));transform-origin:top center}
+body.desktop-mode .desktop-dashboard-left{display:block;position:static;overflow:visible;pointer-events:auto}
+body.desktop-mode .os-board{--agent-gap:16px;--agent-row-gap:16px;--agent-lower-height:112px;--agent-lower-bottom:16px;--agent-lower-offset:144px;--agent-side-width:262px;--agent-main-right:calc(var(--agent-side-width) + var(--agent-gap));--agent-category-width:calc((100% - var(--agent-main-right) - (var(--agent-gap) * 4)) / 5)}
+body.desktop-mode .desktop-dashboard-right{display:block;position:absolute;right:0;top:60px;bottom:var(--agent-lower-offset);width:var(--agent-side-width);overflow:hidden;pointer-events:auto}
+body.desktop-mode .desktop-surface{position:absolute;left:calc(var(--agent-category-width) + var(--agent-gap));right:var(--agent-main-right);top:176px;bottom:var(--agent-lower-offset);min-height:0;height:auto;border:1px solid rgba(192,213,239,.92);border-radius:16px;background:rgba(255,255,255,.72);box-shadow:0 14px 34px rgba(41,92,148,.09);backdrop-filter:blur(18px);overflow:hidden;overscroll-behavior:contain;pointer-events:auto}
+body.desktop-mode .desktop-surface:before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle at 50% 20%,rgba(255,255,255,.55),transparent 28%),linear-gradient(120deg,rgba(255,255,255,.28),transparent 45%);opacity:.74}
+body.desktop-mode .agent-dashboard-title{position:absolute;left:0;top:0;display:grid;gap:4px;color:#0f2a44}
+body.desktop-mode .agent-dashboard-title span{font-size:24px;font-weight:950;letter-spacing:.2px}
+body.desktop-mode .agent-dashboard-title small{color:#486887;font-size:12px;font-weight:800}
+body.desktop-mode .agent-stat-grid{position:absolute;left:0;right:var(--agent-main-right);top:60px;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:var(--agent-gap)}
+body.desktop-mode .agent-stat-grid article,body.desktop-mode .agent-board-panel,body.desktop-mode .agent-resource-panel,body.desktop-mode .agent-announcement-panel,body.desktop-mode .agent-detail-card,body.desktop-mode .agent-advice-card{border:1px solid rgba(255,255,255,.76);border-radius:22px;background:linear-gradient(145deg,rgba(255,255,255,.86),rgba(229,244,255,.66));box-shadow:0 18px 42px rgba(18,47,82,.13);backdrop-filter:blur(18px);color:#162236}
+body.desktop-mode .agent-stat-grid article{position:relative;overflow:hidden;min-height:100px;padding:15px 74px 13px 16px;border-radius:14px;background:rgba(255,255,255,.8)}
+body.desktop-mode .agent-stat-grid article:before{display:none}
+body.desktop-mode .agent-stat-grid article:after{content:"";position:absolute;right:-18px;bottom:-28px;width:108px;height:76px;border-radius:50%;background:radial-gradient(circle,rgba(32,132,222,.28),transparent 68%)}
+body.desktop-mode .agent-stat-grid small{display:block;color:#617890;font-size:11px;font-weight:900;white-space:nowrap}
+body.desktop-mode .agent-stat-grid b{display:block;margin-top:7px;color:#0f2a44;font-size:27px;line-height:1;letter-spacing:0;white-space:nowrap}
+body.desktop-mode .agent-stat-grid b.is-counting{animation:agentStatCount 1.35s cubic-bezier(.22,1,.36,1) both;will-change:transform,filter}
+@keyframes agentStatCount{0%{opacity:.48;transform:translateY(4px) scale(.96);filter:blur(.3px)}38%{opacity:1;transform:translateY(0) scale(1.045);filter:none}72%{transform:scale(.99)}100%{opacity:1;transform:none;filter:none}}
+body.desktop-mode .agent-stat-grid span{display:block;margin-top:12px;color:#5c7188;font-size:10px;font-weight:800;white-space:nowrap}
+body.desktop-mode .agent-stat-grid span em{color:#20b877;font-style:normal;font-weight:950}
+body.desktop-mode .agent-stat-grid i{--stat-tone:#2384ee;position:absolute;right:8px;top:13px;z-index:2;display:grid;place-items:center;width:70px;height:70px;color:color-mix(in srgb,var(--stat-tone) 72%,#173858);filter:drop-shadow(0 13px 18px color-mix(in srgb,var(--stat-tone) 18%,transparent))}
+body.desktop-mode .agent-stat-grid i:before,body.desktop-mode .agent-stat-grid i:after{content:none;display:none}
+body.desktop-mode .agent-stat-grid i>[id^="stat"]{position:relative;z-index:2;display:grid;place-items:center}
+body.desktop-mode .agent-stat-grid i>[id^="stat"]>.ant-app{display:grid;place-items:center}
+body.desktop-mode .agent-stat-grid .agent-stat-ant-icon{display:grid;place-items:center;width:70px;height:70px;margin:0;color:inherit;text-shadow:0 1px 0 rgba(255,255,255,.48)}
+body.desktop-mode .agent-stat-grid .agent-stat-ant-icon img{display:block;width:100%;height:100%;border-radius:18px;object-fit:contain;mix-blend-mode:normal}
+body.desktop-mode .agent-stat-grid .agent-stat-ant-icon .anticon{font-size:25px;filter:drop-shadow(0 2px 4px rgba(22,58,93,.14))}
+body.desktop-mode .agent-stat-grid .agent-stat-ant-icon svg{width:1em;height:1em;fill:currentColor;stroke:none}
+body.desktop-mode .agent-stat-grid article[data-tone="green"] i{--stat-tone:#23c55e}
+body.desktop-mode .agent-stat-grid article[data-tone="cyan"] i{--stat-tone:#2788f4}
+body.desktop-mode .agent-stat-grid article[data-tone="orange"] i{--stat-tone:#ff9418}
+body.desktop-mode .agent-stat-grid article[data-tone="purple"] i{--stat-tone:#8758ea}
+body.desktop-mode .agent-stat-grid article[data-tone="green"]:after{background:radial-gradient(circle,rgba(35,190,100,.18),transparent 68%)}
+body.desktop-mode .agent-stat-grid article[data-tone="orange"]:after{background:radial-gradient(circle,rgba(255,148,24,.17),transparent 68%)}
+body.desktop-mode .agent-stat-grid article[data-tone="purple"]:after{background:radial-gradient(circle,rgba(132,87,232,.16),transparent 68%)}
+body.desktop-mode .agent-board-panel,body.desktop-mode .agent-resource-panel,body.desktop-mode .agent-announcement-panel,body.desktop-mode .agent-detail-card,body.desktop-mode .agent-advice-card{padding:16px}
+body.desktop-mode .agent-board-panel{position:absolute;left:0;top:176px;width:var(--agent-category-width);bottom:var(--agent-lower-offset);overflow:hidden;border-radius:14px;background:rgba(255,255,255,.78);box-shadow:0 14px 34px rgba(18,47,82,.1)}
+body.desktop-mode .agent-panel-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+body.desktop-mode .agent-panel-head b{font-size:14px;color:#0f2a44}
+body.desktop-mode .agent-panel-head span{border-radius:999px;background:rgba(21,91,150,.08);color:#155b96;padding:4px 8px;font-size:11px;font-weight:900}
+body.desktop-mode .agent-category-collapse{display:inline-flex;align-items:center;justify-content:center;height:26px;border:1px solid transparent;border-radius:999px;background:rgba(21,91,150,.08);color:#155b96;padding:0 9px;font-size:11px;font-weight:900}
+body.desktop-mode .agent-category-collapse:hover{border-color:#b8d6f3;background:#fff;color:#075ee6}
+body.desktop-mode .agent-board-list{display:grid;gap:6px;max-height:calc(100% - 92px);overflow:hidden}
+body.desktop-mode .agent-board-list>.ant-app{display:contents}
+body.desktop-mode .agent-board-item{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;border:1px solid transparent;border-radius:9px;background:transparent;padding:12px 10px;color:#24364b}
+body.desktop-mode .agent-board-item.active,body.desktop-mode .agent-board-item:hover{background:#eef6ff;border-color:#d4e7fb;color:#075ee6}
+body.desktop-mode .agent-board-item b{display:flex;align-items:center;gap:8px;min-width:0;overflow:hidden;white-space:nowrap;font-size:12px}
+body.desktop-mode .agent-board-item b .anticon{flex:none;color:#66809c;font-size:15px}
+body.desktop-mode .agent-board-item b span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+body.desktop-mode .agent-board-item>span{border-radius:999px;background:#edf4fb;color:#47637f;padding:4px 8px;font-size:10px;font-weight:900}
+body.desktop-mode .agent-board-item.active b .anticon{color:#075ee6}
+body.desktop-mode .agent-board-item.active>span{background:#dcecff;color:#075ee6}
+body.desktop-mode .agent-category-actions{position:absolute;left:16px;right:16px;bottom:14px}
+body.desktop-mode .agent-category-actions .ant-space-compact{width:100%}
+body.desktop-mode .agent-category-actions .ant-btn{height:36px;font-size:12px;font-weight:400}
+body.desktop-mode .agent-category-actions .ant-btn:first-child{flex:1}
+body.desktop-mode .os-board.agent-categories-collapsed .agent-board-panel{width:58px;padding:12px 8px}
+body.desktop-mode .os-board.agent-categories-collapsed .agent-board-panel .agent-panel-head{justify-content:center;margin:0}
+body.desktop-mode .os-board.agent-categories-collapsed .agent-board-panel .agent-panel-head b,
+body.desktop-mode .os-board.agent-categories-collapsed .agent-board-list,
+body.desktop-mode .os-board.agent-categories-collapsed .agent-category-actions{display:none}
+body.desktop-mode .os-board.agent-categories-collapsed .agent-category-collapse{width:40px;padding:0;font-size:0}
+body.desktop-mode .os-board.agent-categories-collapsed .agent-category-collapse:after{content:"»";font-size:16px}
+body.desktop-mode .os-board.agent-categories-collapsed .desktop-surface{left:calc(58px + var(--agent-gap))}
+body.desktop-mode .agent-lower-panels{position:absolute;left:0;right:0;bottom:var(--agent-lower-bottom);height:var(--agent-lower-height);display:grid;grid-template-columns:1.25fr 1fr;gap:var(--agent-gap)}
+body.desktop-mode .agent-resource-panel,body.desktop-mode .agent-announcement-panel{min-width:0;overflow:hidden;border-radius:14px;background:rgba(255,255,255,.8);padding:12px 16px}
+body.desktop-mode .agent-lower-panels .agent-panel-head{margin-bottom:7px}
+body.desktop-mode .agent-resource-grid{display:grid;grid-template-columns:1fr 1fr;gap:28px}
+body.desktop-mode .agent-resource-grid>div{position:relative;display:grid;grid-template-columns:1fr auto;gap:4px 10px;min-width:0}
+body.desktop-mode .agent-resource-grid>div+div:before{content:"";position:absolute;left:-14px;top:2px;bottom:2px;width:1px;background:#d9e8f6}
+body.desktop-mode .agent-resource-grid small{grid-column:1/-1;color:#6d8197;font-size:9px;font-weight:900}
+body.desktop-mode .agent-resource-grid strong{grid-column:1/-1;color:#17304a;font-size:15px;line-height:1}
+body.desktop-mode .agent-resource-grid strong em{color:#8395a8;font-size:9px;font-style:normal}
+body.desktop-mode .agent-progress{align-self:center;height:7px;border-radius:999px;background:#eaf2fb;overflow:hidden}
+body.desktop-mode .agent-progress i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#63a9f5,#247be7)}
+body.desktop-mode .agent-resource-grid>div>b{color:#6d8197;font-size:9px}
+body.desktop-mode .agent-announcement-row{display:grid;grid-template-columns:7px minmax(0,1fr) auto;gap:8px;align-items:center;padding:5px 0;color:#536d88;font-size:9px;font-weight:800}
+body.desktop-mode .agent-announcement-row i{width:6px;height:6px;border-radius:50%;background:#438fec;box-shadow:0 0 0 3px rgba(67,143,236,.1)}
+body.desktop-mode .agent-announcement-row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+body.desktop-mode .agent-announcement-row time{color:#8a9bad;font-size:9px;white-space:nowrap}
+body.desktop-mode .agent-detail-card{border:0;border-radius:14px;background:linear-gradient(165deg,rgba(255,255,255,.94),rgba(235,246,255,.86));box-shadow:none;backdrop-filter:blur(20px);color:#162236;padding:16px}
+body.desktop-mode .agent-detail-expanded{height:100%;overflow:auto;scrollbar-width:thin;scrollbar-color:#c2d7ed transparent}
+body.desktop-mode .agent-detail-heading{display:inline-flex;align-items:center;gap:7px}
+body.desktop-mode .agent-detail-heading:before{content:"";width:12px;height:12px;background:conic-gradient(from 45deg,transparent 0 12%,#176fe6 13% 24%,transparent 25% 37%,#176fe6 38% 49%,transparent 50% 62%,#176fe6 63% 74%,transparent 75% 87%,#176fe6 88%);clip-path:polygon(50% 0,61% 38%,100% 50%,61% 62%,50% 100%,39% 62%,0 50%,39% 38%)}
+body.desktop-mode .agent-record-id{display:block;margin:4px 0 8px;color:#70859d;font:800 10px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace}
+body.desktop-mode .agent-detail-title-row{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+body.desktop-mode .agent-detail-card .agent-detail-title-row strong{display:block;min-width:0;margin:0;color:#0f2a44;font-size:17px;line-height:1.3}
+body.desktop-mode .agent-priority{flex:none;border:1px solid #b9d7fb;border-radius:999px;background:#eaf4ff;color:#075ee6;padding:4px 7px;font-size:9px;font-weight:900}
+body.desktop-mode .agent-detail-card>p{margin:10px 0 0;color:#52677f;font-size:11px;line-height:1.65}
+body.desktop-mode .agent-insight-fields{display:grid;gap:8px;margin:14px 0 0;padding:12px 0;border-top:1px solid #dce9f6;border-bottom:1px solid #dce9f6}
+body.desktop-mode .agent-detail-card .agent-insight-fields>div{display:grid;grid-template-columns:64px minmax(0,1fr);gap:9px;align-items:center}
+body.desktop-mode .agent-detail-card dt{color:#71859b;font-size:10px;font-weight:900}
+body.desktop-mode .agent-detail-card dt label{cursor:pointer}
+body.desktop-mode .agent-detail-card dd{margin:0;color:#203248;font-size:10px;font-weight:850;line-height:1.35;overflow-wrap:anywhere}
+body.desktop-mode .agent-status:before{content:"";display:inline-block;width:7px;height:7px;margin-right:6px;border-radius:50%;background:#20b487;box-shadow:0 0 0 3px rgba(32,180,135,.12)}
+body.desktop-mode .agent-insight-tags{margin-top:13px}
+body.desktop-mode .agent-insight-tags>b{display:block;margin-bottom:8px;color:#0f2a44;font-size:11px}
+body.desktop-mode .agent-insight-tags>div{display:flex;gap:5px;flex-wrap:wrap}
+body.desktop-mode .agent-insight-tags button{min-height:28px;border:1px solid #cfe2f8;border-radius:6px;background:#eef6ff;color:#075ee6;padding:5px 7px;font-size:9px;font-weight:900;cursor:pointer;transition:background .18s ease,color .18s ease,border-color .18s ease}
+body.desktop-mode .agent-insight-tags button:hover{border-color:#75adf0;background:#dfeeff}
+body.desktop-mode .agent-insight-tags button[aria-pressed="true"]{border-color:#075ee6;background:#075ee6;color:#fff}
+body.desktop-mode .agent-insight-tags button:focus-visible{outline:3px solid rgba(7,94,230,.18);outline-offset:2px}
+body.desktop-mode .agent-inline-advice{margin-top:14px;border:1px solid #d7e6f5;border-radius:12px;background:rgba(242,248,255,.82);padding:12px}
+body.desktop-mode .agent-inline-advice>b{color:#0f2a44;font-size:12px}
+body.desktop-mode .agent-inline-advice ul{display:grid;gap:6px;margin:9px 0 0;padding-left:16px;color:#52677f;font-size:10px;line-height:1.45}
+body.desktop-mode .agent-inline-advice button{display:inline-flex;align-items:center;justify-content:center;width:100%;height:34px;margin:11px 0 0;border:1px solid #075ee6;border-radius:7px;background:#075ee6;color:#fff;font-size:11px;font-weight:900}
+body.desktop-mode .agent-inline-advice button:hover{background:#fff;color:#172033;border-color:#c9dced}
+body.desktop-mode .agent-insight-actions{margin-top:12px}
+body.desktop-mode .agent-insight-actions .ant-btn{height:32px;font-size:9px;font-weight:900}
+body.desktop-mode .agent-list-toolbar{position:sticky;left:0;right:0;top:0;z-index:7;display:flex;align-items:center;justify-content:space-between;height:62px;padding:14px 18px;background:rgba(250,253,255,.9);backdrop-filter:blur(14px)}
+body.desktop-mode .agent-list-toolbar>div{display:flex;align-items:center;gap:8px}
+body.desktop-mode .agent-list-toolbar button{height:34px;border:1px solid #d8e6f5;border-radius:8px;background:#fff;color:#425d7d;padding:0 12px;font-size:11px;font-weight:800}
+body.desktop-mode .agent-list-toolbar button:hover,body.desktop-mode .agent-view-switch button.active{border-color:#8fbcf3;background:#eef6ff;color:#075ee6}
+body.desktop-mode .agent-view-switch .ant-btn{width:auto;min-width:96px;padding:0 14px;font-size:11px}
+body.desktop-mode .agent-view-switch .ant-btn .anticon{font-size:15px}
+body.desktop-mode .app-grid{position:absolute!important;inset:0!important;z-index:2;width:100%;min-height:100%;-webkit-mask-image:linear-gradient(to bottom,transparent 54px,#000 86px,#000 calc(100% - 36px),transparent 100%);mask-image:linear-gradient(to bottom,transparent 54px,#000 86px,#000 calc(100% - 36px),transparent 100%)}
+body.desktop-mode .app-card.agent-card{width:150px;height:168px;border-radius:10px!important;background:rgba(255,255,255,.88)!important}
+body.desktop-mode .agent-card-head{grid-template-columns:36px 1fr}
+body.desktop-mode .agent-avatar{width:36px;height:36px;border-radius:12px}
+body.desktop-mode .agent-card-meta{min-height:38px;margin:9px 0 0}
+body.desktop-mode .agent-tool-line{bottom:42px}
+body.desktop-mode .agent-chat-btn{bottom:10px;height:26px;min-height:26px}
+body.desktop-mode .app-grid{perspective:1500px;transform-style:preserve-3d;isolation:isolate}
+body.desktop-mode .app-grid.orbit-view{cursor:grab;touch-action:none}
+body.desktop-mode .app-grid.orbit-view.orbit-dragging{cursor:grabbing}
+body.desktop-mode .app-grid:before{content:"";position:absolute;left:11%;right:11%;top:48%;height:35%;border-radius:50%;background:radial-gradient(ellipse,rgba(35,91,153,.2),rgba(63,143,222,.08) 42%,transparent 72%);filter:blur(15px);pointer-events:none}
+body.desktop-mode .app-card.agent-card{left:50%!important;top:48%!important;width:176px;height:226px;padding:15px 13px 50px;border:1px solid rgba(193,216,242,.95);border-radius:13px!important;background:linear-gradient(155deg,rgba(255,255,255,.97),rgba(226,242,255,.9))!important;box-shadow:0 18px 36px rgba(27,77,132,.18)!important;opacity:var(--orbit-opacity,1);transform:translate(-50%,-50%) translate3d(var(--orbit-x,0px),var(--orbit-y,0px),var(--orbit-z,0px)) rotateY(var(--orbit-tilt,0deg)) scale(var(--orbit-scale,1));transform-origin:50% 100%;transform-style:preserve-3d;z-index:var(--orbit-order,200);will-change:transform,opacity,box-shadow;-webkit-user-select:none;user-select:none;transition:transform .12s linear,opacity .2s ease,box-shadow .28s ease,border-color .2s ease,filter .2s ease}
+body.desktop-mode .app-card.agent-card:before,body.desktop-mode .app-card.agent-card:after{display:none!important;content:none!important}
+body.desktop-mode .app-card.agent-card:hover,body.desktop-mode .app-card.agent-card.orbit-hovered,body.desktop-mode .app-card.agent-card:focus-visible{z-index:600!important;outline:0;opacity:1;filter:saturate(1.08);border-color:#4e9cf1;box-shadow:0 34px 64px rgba(26,80,139,.3)!important;transform:translate(-50%,-50%) translate3d(var(--orbit-x,0px),calc(var(--orbit-y,0px) - 46px),calc(var(--orbit-z,0px) + 220px)) rotateY(0deg) scale(calc(var(--orbit-scale,1) + .14))}
+body.desktop-mode .app-card.agent-card.selected{background:linear-gradient(155deg,#fff,#e4f2ff)!important;border-color:#075ee6;box-shadow:0 0 0 2px rgba(7,94,230,.17),0 22px 44px rgba(26,80,139,.22)!important;opacity:var(--orbit-opacity,1);transform:translate(-50%,-50%) translate3d(var(--orbit-x,0px),var(--orbit-y,0px),var(--orbit-z,0px)) rotateY(var(--orbit-tilt,0deg)) scale(var(--orbit-scale,1))}
+body.desktop-mode .app-card.agent-card.selected:hover,body.desktop-mode .app-card.agent-card.selected.orbit-hovered{z-index:620!important}
+body.desktop-mode .app-card.agent-card .agent-card-head{grid-template-columns:42px 1fr;min-height:46px}
+body.desktop-mode .app-card.agent-card .agent-avatar{width:42px;height:42px;border-radius:13px;font-size:15px}
+body.desktop-mode .app-card.agent-card strong{font-size:13px}
+body.desktop-mode .app-card.agent-card.selected strong{background:transparent;color:#162236;border-radius:0;padding:0}
+body.desktop-mode .app-card.agent-card small{font-size:9px}
+body.desktop-mode .app-card.agent-card .agent-card-meta{gap:7px;margin-top:12px;min-height:48px}
+body.desktop-mode .app-card.agent-card .agent-meta-row{grid-template-columns:36px minmax(0,1fr);font-size:9px}
+body.desktop-mode .app-card.agent-card .agent-tool-line{left:13px;right:13px;bottom:48px;height:20px}
+body.desktop-mode .app-card.agent-card .agent-chat-btn{left:13px;right:13px;bottom:12px;height:28px;min-height:28px}
+body.desktop-mode .app-grid.grid-view{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));align-content:start;gap:16px;overflow:auto;padding:78px 16px 16px;perspective:none;transform-style:flat;-webkit-mask-image:linear-gradient(to bottom,transparent 58px,#000 78px,#000 calc(100% - 18px),transparent 100%);mask-image:linear-gradient(to bottom,transparent 58px,#000 78px,#000 calc(100% - 18px),transparent 100%)}
+body.desktop-mode .app-grid.grid-view:before{display:none}
+body.desktop-mode .app-grid.grid-view .app-card.agent-card{position:relative!important;left:auto!important;top:auto!important;width:100%;height:226px;opacity:1!important;z-index:auto!important;transform:none!important;transition:transform .24s cubic-bezier(.2,.8,.2,1),box-shadow .24s ease,border-color .2s ease}
+body.desktop-mode .app-grid.grid-view .app-card.agent-card:hover,body.desktop-mode .app-grid.grid-view .app-card.agent-card:focus-visible{z-index:2!important;transform:translateY(-5px)!important;box-shadow:0 22px 44px rgba(26,80,139,.22)!important}
+body.desktop-mode .agent-window.agent-window-centered{position:fixed!important;max-height:calc(100vh - 48px);overflow:hidden}
+body.desktop-mode .agent-window.agent-window-centered .agent-chat-body{max-height:calc(100vh - 104px);overflow:auto;overscroll-behavior:contain}
+body .os-window.product-window-centered{position:fixed!important;max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);overflow:hidden}
+body .os-window.product-window-centered>.os-body{max-height:calc(100vh - 66px);overflow:auto;overscroll-behavior:contain}
+body.desktop-mode .agent-category-dialog{position:fixed!important;width:min(420px,calc(100vw - 32px));border:1px solid #c9ddef;box-shadow:0 28px 80px rgba(25,70,120,.24)}
+body.desktop-mode .agent-category-dialog .os-body{padding:22px}
+body.desktop-mode .agent-category-dialog label{display:block;margin-bottom:8px;color:#17304a;font-size:12px;font-weight:900}
+body.desktop-mode .agent-category-dialog input{width:100%;height:42px;border:1px solid #cbdced;border-radius:9px;background:#fff;padding:0 12px;color:#1b3048;outline:none}
+body.desktop-mode .agent-category-dialog input:focus{border-color:#3587e6;box-shadow:0 0 0 3px rgba(53,135,230,.12)}
+body.desktop-mode .agent-category-dialog small{display:block;min-height:18px;margin-top:7px;color:#71859a;font-size:10px}
+body.desktop-mode .agent-category-dialog-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:14px}
+body.desktop-mode .agent-category-dialog-actions.has-delete{grid-template-columns:auto 1fr 1fr}
+body.desktop-mode .agent-category-dialog-actions button{display:inline-flex;align-items:center;justify-content:center;height:38px;margin:0;border:1px solid #cbdced;border-radius:8px;background:#fff;color:#294760;padding:0;text-align:center}
+body.desktop-mode .agent-category-dialog-actions .primary{border-color:#075ee6;background:#075ee6;color:#fff}
+body.desktop-mode .agent-category-dialog-actions .primary:hover{background:#fff;color:#172033}
+body.desktop-mode .agent-category-dialog-actions .danger{border-color:#ffd2d2;color:#d93d3d;padding:0 13px}
+body.desktop-mode .agent-category-dialog-actions .danger:hover{background:#fff1f1;border-color:#ef7373}
+body.desktop-mode .desktop-footer{position:fixed;left:0;right:0;bottom:0;z-index:62;display:flex;align-items:center;justify-content:space-between;height:62px;padding:0 28px;border-top:1px solid #e7f0fa;background:linear-gradient(180deg,rgba(251,254,255,.92),rgba(240,248,255,.9));backdrop-filter:blur(18px);box-shadow:0 -1px 0 rgba(255,255,255,.88),0 -12px 36px rgba(111,158,205,.08);color:#6a7f95;font-size:12px;font-weight:800;pointer-events:auto}
+body.desktop-mode .desktop-footer-left{display:flex;align-items:center;gap:14px;min-width:0}
+body.desktop-mode .desktop-footer-left span{white-space:nowrap}
+body.desktop-mode .desktop-footer-left b{display:inline-flex;align-items:center;height:24px;border:1px solid #cfe0f3;border-radius:999px;background:rgba(255,255,255,.72);color:#075ee6;padding:0 10px;font-size:11px}
+body.desktop-mode .desktop-footer-links{display:flex;align-items:center;gap:30px}
+body.desktop-mode .desktop-footer-links a,body.desktop-mode .desktop-footer-links button{border:0;background:transparent;color:#405a76;padding:0;font-size:12px;font-weight:900;text-decoration:none}
+body.desktop-mode .desktop-footer-links a:hover,body.desktop-mode .desktop-footer-links button:hover{color:#075ee6}
+.desktop-footer{display:none}
+.help-docs-window{width:min(560px,calc(100vw - 32px))}
+.help-docs-body{display:grid;gap:12px;color:#203248}
+.help-docs-body h3{margin:0;color:#0f2a44;font-size:18px}
+.help-docs-body p{margin:0;color:#5a7088;font-size:12px;line-height:1.7}
+.help-docs-list{display:grid;gap:9px;margin:0;padding:0;list-style:none}
+.help-docs-list li{border:1px solid #d9e8f6;border-radius:12px;background:#f7fbff;padding:11px 12px}
+.help-docs-list b{display:block;color:#0f2a44;font-size:13px;margin-bottom:4px}
+.help-docs-list span{display:block;color:#5a7088;font-size:11px;line-height:1.55}
+@media(prefers-reduced-motion:reduce){body.desktop-mode .app-card.agent-card{transition:none}body.desktop-mode .app-card.agent-card:hover,body.desktop-mode .app-card.agent-card.orbit-hovered,body.desktop-mode .app-card.agent-card:focus-visible{transform:translate(-50%,-50%) translate3d(var(--orbit-x,0px),calc(var(--orbit-y,0px) - 18px),calc(var(--orbit-z,0px) + 40px)) rotateY(0deg) scale(var(--orbit-scale,1))}}
+body.desktop-mode .desktop-tools{left:0;right:0;top:0;z-index:8;height:34px;border:0;border-radius:0;background:transparent;box-shadow:none;backdrop-filter:none;pointer-events:none;transform:none}
+body.desktop-mode .desktop-search-slot{position:absolute;left:50%;top:0;transform:translateX(-50%);pointer-events:auto}
+body.desktop-mode .desktop-tool-actions{position:absolute;right:var(--agent-main-right);top:0;display:flex;align-items:center;gap:8px;pointer-events:auto}
+body.desktop-mode .agent-search-control{position:relative}
+body.desktop-mode .agent-search-control .ant-input-affix-wrapper{width:340px;height:34px;border-color:#d6e5f5;border-radius:999px;background:rgba(255,255,255,.9);padding:0 14px;color:#426282;box-shadow:0 10px 30px rgba(42,95,151,.12)}
+body.desktop-mode .agent-search-control .ant-input{height:auto;background:transparent;color:#263f5d;font-size:12px}
+body.desktop-mode .agent-search-control .ant-input::placeholder{color:#7c91aa}
+body.desktop-mode #desktopSearchStatus{position:absolute;left:14px;top:40px;display:none;border-radius:999px;background:rgba(255,255,255,.92);box-shadow:0 8px 20px rgba(42,95,151,.12);color:#526f8d;padding:4px 9px;font-size:10px;font-weight:800;white-space:nowrap}
+body.desktop-mode #desktopSearchStatus:not(:empty){display:block}
+body.desktop-mode .desktop-tools #newFileBtn{display:inline-flex;align-items:center;justify-content:center;width:auto;height:34px;border:0;border-radius:999px;background:#075ee6;color:#fff;padding:0 16px;font-size:12px;font-weight:950;box-shadow:0 10px 24px rgba(7,94,230,.22)}
+body.desktop-mode .desktop-tools #newFileBtn:hover{background:#0a55c8;color:#fff;transform:translateY(-1px)}
+body.desktop-mode .desktop-tools #deleteFileBtn{display:none}
+body.desktop-mode .selection-box{z-index:6}
+body.desktop-mode .selection-actions{display:none!important}
+body.desktop-mode .agent-search-empty{position:absolute;left:50%;top:50%;display:grid;justify-items:center;gap:8px;width:min(360px,80%);transform:translate(-50%,-50%);border:1px dashed #bfd7ef;border-radius:12px;background:rgba(255,255,255,.82);padding:28px;color:#607b98;text-align:center;box-shadow:0 16px 38px rgba(45,96,151,.1)}
+body.desktop-mode .agent-search-empty strong{color:#173652;font-size:15px}
+body.desktop-mode .agent-search-empty span{font-size:11px;line-height:1.5}
+body.desktop-mode .agent-model-availability{position:absolute;left:16px;right:16px;top:60px;z-index:7;pointer-events:auto}
+body.desktop-mode .agent-model-availability:empty{display:none}
+body.desktop-mode .agent-model-availability .ant-alert{align-items:center;border-radius:10px;border-color:#ffd591;background:rgba(255,251,230,.96);box-shadow:0 10px 28px rgba(126,91,20,.1)}
+body.desktop-mode .agent-model-availability .ant-alert-message{font-size:13px;font-weight:500}
+body.desktop-mode .agent-model-availability .ant-alert-description{font-size:11px}
+body.desktop-mode .agent-model-availability .ant-btn{height:30px;border-radius:7px;font-size:12px;font-weight:400}
+body.desktop-mode .workbench-detail-select-guard{width:100%}
+body.desktop-mode .topbar{position:absolute}
+body.desktop-mode .topbar-user-cluster{display:flex;align-items:center;gap:10px;height:100%;margin-left:auto}
+body.desktop-mode .topbar time{position:static;left:auto;display:inline-flex;align-items:center;justify-content:center;margin:0;padding:0;transform:none;font-variant-numeric:tabular-nums}
+body.desktop-mode .topbar time:before,body.desktop-mode .topbar time:after{display:none!important;content:none!important}
+body.desktop-mode .antd-topbar-settings{display:flex;align-items:center;gap:8px}
+body.desktop-mode .antd-user-area{display:flex;align-items:center;margin-left:0}
+body.desktop-mode .topbar-logout-hidden{display:none!important}
+body.desktop-mode .desktop-tools .antd-topbar-settings .ant-btn{width:auto!important;min-width:82px;height:34px;border-color:#d6e3f2;border-radius:999px!important;background:#fff;color:#24405f;padding-inline:12px;font-size:12px;font-weight:400!important;white-space:nowrap;box-shadow:none}
+body.desktop-mode .antd-topbar-settings .ant-btn:hover{border-color:#8fbcf3!important;background:#fff!important;color:#075ee6!important}
+.workbench-form-help{margin-top:8px;color:#71839a;font-size:13px;font-weight:400;line-height:1.5}
+body.desktop-mode .workbench-user-button{display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 4px;color:#203c5d}
+body.desktop-mode .workbench-user-button:before,body.desktop-mode .workbench-user-button:after{display:none!important;content:none!important}
+body.desktop-mode .agent-detail-card .agent-insight-fields dd{min-width:0;overflow:hidden}
+body.desktop-mode .agent-detail-card .agent-insight-fields #antdAgentCategorySelect,
+body.desktop-mode .agent-detail-card .agent-insight-fields .antd-agent-detail-select{display:block;width:100%;min-width:0}
+body.desktop-mode #antdAgentCategorySelect .ant-app,
+body.desktop-mode .antd-agent-detail-select .ant-app{display:block;width:100%;min-width:0}
+body.desktop-mode #antdAgentCategorySelect .ant-select,
+body.desktop-mode .antd-agent-detail-select .ant-select{width:100%;min-width:0}
+body.desktop-mode .workbench-control-select.ant-select{height:32px;min-height:32px}
+body.desktop-mode .workbench-control-select.ant-select .ant-select-selector{height:32px!important;min-height:32px!important;padding:0 11px!important;border-color:#d8e6f5!important;background:#fff!important;font-size:14px!important;font-weight:400!important}
+body.desktop-mode .workbench-control-select.ant-select .ant-select-content{display:flex;align-items:center;height:30px;min-height:30px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px!important;font-weight:400!important;line-height:22px!important}
+body.desktop-mode .workbench-control-select.ant-select .ant-select-selection-wrap{height:30px;min-height:30px;align-items:center}
+body.desktop-mode .workbench-control-select.ant-select .ant-select-selection-item,
+body.desktop-mode .workbench-control-select.ant-select .ant-select-selection-placeholder{font-size:14px!important;font-weight:400!important;line-height:22px!important}
+body.desktop-mode .workbench-control-select.ant-select .ant-select-arrow,
+body.desktop-mode .workbench-control-select.ant-select .ant-select-suffix{font-size:12px}
+body.desktop-mode #antdAgentCategorySelect .ant-select-selector,
+body.desktop-mode .antd-agent-detail-select .ant-select-selector{font-size:14px!important;font-weight:400!important}
+body.desktop-mode #antdAgentCategorySelect .ant-select-selection-item,
+body.desktop-mode .antd-agent-detail-select .ant-select-selection-item{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px!important;font-weight:400!important}
+body.desktop-mode #antdAgentCategorySelect .ant-select-content,
+body.desktop-mode .antd-agent-detail-select .ant-select-content{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px!important;font-weight:400!important;line-height:22px!important}
+body.desktop-mode #antdAgentFilters{display:flex;align-items:center}
+body.desktop-mode #antdAgentFilters .ant-select-selector{border-color:#d8e6f5!important;background:#fff!important;font-size:14px!important;font-weight:400;color:#425d7d}
+body.desktop-mode #antdAgentFilters .ant-select:hover .ant-select-selector{border-color:#8fbcf3!important}
+.ant-select .ant-select-selection-item,
+.ant-select .ant-select-selection-placeholder,
+.ant-select .ant-select-content,
+.ant-select-dropdown .ant-select-item,
+.ant-select-dropdown .ant-select-item-option-content{font-size:14px!important;font-weight:400!important}
+body.desktop-mode #announcementList{display:grid;gap:7px}
+body.desktop-mode .agent-announcement-empty{padding:10px 0;color:#7890aa;font-size:11px}
+body.desktop-mode .agent-resource-panel [data-updated]{display:block;margin-top:5px;color:#8296ab;font-size:9px}
+.agent-x-modal-v2 .ant-modal{max-width:calc(100vw - 32px)}
+.agent-x-modal-v2 .ant-modal-content{overflow:hidden;padding:0;border:0;border-radius:16px;background:#fff;box-shadow:0 24px 80px rgba(20,50,84,.22)}
+.agent-x-modal-v2 .ant-modal-header{margin:0;border-bottom:1px solid #edf1f6;background:#fff;padding:16px 20px}
+.agent-x-modal-v2 .ant-modal-title{color:#162236}
+.agent-x-modal-v2 .ant-modal-close{top:17px;right:18px}
+.agent-x-modal-v2 .ant-modal-body{padding:0}
+.agent-x-modal-title{display:flex;align-items:center;gap:10px}
+.agent-x-modal-title>.ant-avatar{background:#075ee6;color:#fff}
+.agent-x-modal-title>span{display:grid;gap:1px}
+.agent-x-modal-title b{font-size:15px;line-height:1.25}
+.agent-x-modal-title small{color:#8190a3;font-size:10px;font-weight:600}
+.agent-x-shell-v2{display:grid;grid-template-columns:250px minmax(0,1fr);height:min(680px,76vh);min-height:520px;background:#fff}
+.agent-x-modal-v2 .agent-x-history{min-width:0;overflow:auto;border-right:1px solid #edf1f6;background:#f7f9fc;padding:16px 12px}
+.agent-x-history-title{padding:2px 10px 12px;color:#53657b;font-size:12px;font-weight:800}
+.agent-x-modal-v2 .agent-x-history .ant-conversations{background:transparent}
+.agent-x-modal-v2 .agent-x-history .ant-conversations-creation{height:42px;margin-bottom:10px;border:1px dashed #b9d2f2;border-radius:10px;background:#fff;color:#075ee6;font-weight:800}
+.agent-x-modal-v2 .agent-x-history .ant-conversations-item{min-width:0;border-radius:10px}
+.agent-x-modal-v2 .agent-x-history .ant-conversations-item-active{background:#e7f1ff}
+.agent-x-modal-v2 .agent-x-history .ant-conversations-item-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agent-x-modal-v2 .agent-x-chat{display:flex;min-width:0;min-height:0;flex-direction:column;gap:16px;background:#fff;padding:20px 22px 22px}
+.agent-x-modal-v2 .agent-x-chat .ant-bubble-list{flex:1;min-height:0;overflow:auto;padding:4px 2px 16px}
+.agent-x-modal-v2 .agent-x-chat .ant-bubble-content{max-width:min(620px,78%);border-radius:14px;line-height:1.7}
+.agent-x-modal-v2 .agent-x-chat .ant-bubble-start .ant-bubble-content{background:#f3f6fa;color:#26384d}
+.agent-x-modal-v2 .agent-x-chat .ant-bubble-end .ant-bubble-content{background:#075ee6;color:#fff}
+.agent-x-modal-v2 .agent-x-chat .ant-sender{flex:0 0 auto;border:1px solid #d7e1ed;border-radius:14px;background:#fff;box-shadow:0 8px 26px rgba(34,73,116,.08)}
+.agent-x-modal-v2 .agent-x-chat .ant-sender:focus-within{border-color:#075ee6;box-shadow:0 0 0 3px rgba(7,94,230,.1)}
+.agent-x-modal-v2 .agent-x-chat .ant-empty{margin:auto}
+.agent-x-modal-v3 .ant-modal{max-width:calc(100vw - 32px)}
+.agent-x-modal-v3 .ant-modal-container{overflow:hidden;padding:0!important;border:0;border-radius:16px;background:#fff;box-shadow:0 28px 90px rgba(25,55,90,.24)}
+.agent-x-modal-v3 .ant-modal-content{overflow:hidden;padding:0!important;border:0;border-radius:16px;background:#fff;box-shadow:0 28px 90px rgba(25,55,90,.24)}
+.agent-x-modal-v3 .ant-modal-close{top:16px;right:16px;z-index:4}
+.agent-x-modal-v3 .ant-modal-body{padding:0!important}
+.agent-x-shell-v3{display:grid;grid-template-columns:228px minmax(0,1fr);height:min(760px,84vh);min-height:600px;background:#fff}
+.agent-x-modal-v3 .agent-x-history{position:relative;display:flex;min-width:0;min-height:0;flex-direction:column;overflow:hidden;border-right:1px solid #edf1f6;background:#f7f8fb;padding:16px 10px 12px}
+.agent-x-brand{display:flex;align-items:center;gap:8px;height:42px;padding:0 8px 14px;color:#22364f;font-size:13px;font-weight:600}
+.agent-x-brand-mark{display:grid;width:22px;height:22px;place-items:center;border-radius:7px;background:linear-gradient(135deg,#58d8ed,#7b61ff);color:#fff}
+.agent-x-modal-v3 .agent-x-history .ant-conversations{min-height:0;flex:1;overflow:auto;background:transparent}
+.agent-x-modal-v3 .agent-x-history .ant-conversations-creation{height:38px;margin:0 0 12px;border:1px solid #c8dcf4;border-radius:8px;background:#fff;color:#075ee6;font-size:12px;font-weight:400}
+.agent-x-modal-v3 .agent-x-history .ant-conversations-group-title{padding-inline:8px;color:#8391a3;font-size:10px;font-weight:400}
+.agent-x-modal-v3 .agent-x-history .ant-conversations-item{min-width:0;border-radius:8px}
+.agent-x-modal-v3 .agent-x-history .ant-conversations-item-active{background:#e9edf3}
+.agent-x-modal-v3 .agent-x-history .ant-conversations-item-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:400}
+.agent-x-account{display:flex;align-items:center;gap:8px;height:42px;margin-top:8px;padding:8px;color:#63758b;font-size:11px}
+.agent-x-modal-v3 .agent-x-chat{display:flex;min-width:0;min-height:0;flex-direction:column;background:#fff;padding:26px 44px 20px}
+.agent-x-modal-v3 .agent-x-welcome-stage{width:min(760px,100%);margin:auto}
+.agent-x-modal-v3 .ant-welcome{padding:0 0 22px;background:transparent}
+.agent-x-modal-v3 .ant-welcome-icon{margin-inline-end:14px}
+.agent-x-welcome-avatar{background:linear-gradient(145deg,#142947,#075ee6)!important;color:#fff!important;box-shadow:0 8px 22px rgba(7,94,230,.22)}
+.agent-x-modal-v3 .ant-welcome-title{color:#17263a;font-size:20px;font-weight:600}
+.agent-x-modal-v3 .ant-welcome-description{color:#7a8798;font-size:12px}
+.agent-x-modal-v3 .ant-prompts{width:100%}
+.agent-x-modal-v3 .ant-prompts-title{margin-bottom:10px;color:#7a8798;font-size:11px;font-weight:400}
+.agent-x-modal-v3 .agent-x-welcome-stage>.ant-prompts>.ant-prompts-list{display:grid!important;grid-template-columns:1.05fr 1.05fr .9fr;gap:10px}
+.agent-x-modal-v3 .agent-x-welcome-stage>.ant-prompts>.ant-prompts-list>.ant-prompts-item{min-width:0;border:1px solid #edf0f6;border-radius:10px;background:#f5f3ff;padding:12px;box-shadow:none}
+.agent-x-modal-v3 .agent-x-welcome-stage>.ant-prompts>.ant-prompts-list>.ant-prompts-item:nth-child(2){background:#f8f4fb}
+.agent-x-modal-v3 .agent-x-welcome-stage>.ant-prompts>.ant-prompts-list>.ant-prompts-item:nth-child(3){background:#f7f7ff}
+.agent-x-modal-v3 .ant-prompts-item-icon{color:#075ee6}
+.agent-x-modal-v3 .ant-prompts-item-label{color:#26364a;font-size:12px;font-weight:500}
+.agent-x-modal-v3 .ant-prompts-item-description{color:#8a95a5;font-size:10px}
+.agent-x-modal-v3 .ant-prompts-nested{margin-top:8px}
+.agent-x-modal-v3 .ant-prompts-nested .ant-prompts-list{display:flex!important;flex-direction:column;gap:5px}
+.agent-x-modal-v3 .ant-prompts-nested .ant-prompts-item{width:100%;border:0;border-radius:7px;background:rgba(255,255,255,.72);padding:7px 9px;box-shadow:none}
+.agent-x-modal-v3 .ant-prompts-nested .ant-prompts-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#617187;font-size:10px;font-weight:400}
+.agent-x-modal-v3 .agent-x-chat>.ant-bubble-list{flex:1;min-height:0;overflow:auto;padding:16px 0}
+.agent-x-modal-v3 .agent-x-chat .ant-bubble-content{max-width:min(660px,78%);border-radius:14px;line-height:1.7}
+.agent-x-modal-v3 .agent-x-chat .ant-bubble-start .ant-bubble-content{background:#f3f5f8;color:#26384d}
+.agent-x-modal-v3 .agent-x-chat .ant-bubble-end .ant-bubble-content{background:#075ee6;color:#fff}
+.agent-x-composer{width:min(760px,100%);margin:0 auto}
+.agent-x-quick-actions{display:flex;min-height:28px;align-items:center;gap:6px;overflow-x:auto;padding:0 0 8px}
+.agent-x-quick-actions .ant-btn{height:24px;border-color:#dde5ee;border-radius:7px;color:#5c6f86;padding-inline:9px;font-size:10px;font-weight:400;white-space:nowrap}
+.agent-x-modal-v3 .agent-x-chat .ant-sender{border:1px solid #bfd6f2;border-radius:12px;background:#fff;box-shadow:0 8px 24px rgba(34,73,116,.08)}
+.agent-x-modal-v3 .agent-x-chat .ant-sender:focus-within{border-color:#075ee6;box-shadow:0 0 0 3px rgba(7,94,230,.08)}
+.agent-x-modal-v3 .agent-x-chat .ant-sender-input,
+.agent-x-modal-v3 .agent-x-chat .ant-sender-input:hover,
+.agent-x-modal-v3 .agent-x-chat .ant-sender-input:focus,
+.agent-x-modal-v3 .agent-x-chat .ant-sender-input:focus-visible{border:0!important;outline:0!important;box-shadow:none!important;background:transparent!important}
+.agent-x-modal-v3 .agent-x-chat .ant-sender-prefix .ant-btn{color:#60748c}
+.ppt-agent-chat-tools{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid #d9e7f7;border-radius:10px;background:#f6faff}
+.ppt-agent-chat-tools>span{display:inline-flex;align-items:center;gap:7px;color:#183654;font-size:13px;font-weight:600;white-space:nowrap}
+.ppt-agent-chat-tools .ant-space{min-width:0;flex-wrap:wrap;justify-content:flex-end}
+.ppt-agent-chat-tools .ant-tag{margin:0;border-color:#d4e4f8;background:#fff;color:#45617f;font-weight:400}
+.ppt-agent-source-note{display:flex;align-items:flex-start;gap:12px;margin-bottom:16px;padding:12px 14px;border:1px solid #dbe8f6;border-radius:10px;background:#f6faff}
+.ppt-agent-source-note b{color:#173b62;font-size:13px;white-space:nowrap}
+.ppt-agent-source-note span{color:#62768d;font-size:12px;line-height:1.65}
+.ppt-agent-form-grid{display:grid;grid-template-columns:1fr 1fr;column-gap:14px}
+.ppt-agent-builder-modal .ant-modal-content{border-radius:12px}
+@media(max-width:720px){.agent-x-shell-v2,.agent-x-shell-v3{grid-template-columns:1fr;height:min(720px,82vh)}.agent-x-modal-v2 .agent-x-history,.agent-x-modal-v3 .agent-x-history{max-height:170px;border-right:0;border-bottom:1px solid #edf1f6}.agent-x-modal-v2 .agent-x-chat,.agent-x-modal-v3 .agent-x-chat{padding:14px}.agent-x-modal-v3 .agent-x-welcome-stage>.ant-prompts>.ant-prompts-list{grid-template-columns:1fr}.agent-x-account{display:none}}
+@media(max-width:720px){.ppt-agent-chat-tools{align-items:flex-start;flex-direction:column}.ppt-agent-chat-tools .ant-space{justify-content:flex-start}.ppt-agent-form-grid{grid-template-columns:1fr}}
+@media(max-width:1180px){body.desktop-mode .desktop-dashboard-right{display:grid}body.desktop-mode .desktop-surface{right:var(--agent-main-right)}}
+@media(max-width:860px){body.desktop-mode .desktop-dashboard-left,body.desktop-mode .desktop-dashboard-right{display:block}}
 @media(max-width:900px){.site-shell,.works-page,.system-page{padding-inline:18px}.topbar{border-radius:24px}.work-grid,.works-grid{gap:14px}}
 `;
 }
@@ -656,23 +1325,71 @@ const appGrid = document.getElementById("appGrid");
 const newFileBtn = document.getElementById("newFileBtn");
 const worksAddFileBtn = document.getElementById("worksAddFileBtn");
 const worksCanvasRecordsBtn = document.getElementById("worksCanvasRecordsBtn");
+const homeCanvasBtn = document.getElementById("homeCanvasBtn");
 const worksFilesGrid = document.getElementById("worksFilesGrid");
 const deleteFileBtn = document.getElementById("deleteFileBtn");
 const selectionActions = document.getElementById("selectionActions");
 const selectionCount = document.getElementById("selectionCount");
 const selectionDeleteBtn = document.getElementById("selectionDeleteBtn");
-const desktopSearch = document.getElementById("desktopSearch");
+const desktopHelpDocsBtn = document.getElementById("desktopHelpDocsBtn");
 const clock = document.getElementById("clock");
 const launchTarget = document.getElementById("launchTarget");
 const hero = document.getElementById("hero");
 const terminalLines = document.getElementById("terminalLines");
 const heroCta = document.getElementById("heroCta");
+const heroAuthActions = document.getElementById("heroAuthActions");
+const heroLoginBtn = document.getElementById("heroLoginBtn");
+const heroRegisterBtn = document.getElementById("heroRegisterBtn");
+const registerModal = document.getElementById("registerModal");
+const registerForm = document.getElementById("registerForm");
+const registerCloseBtn = document.getElementById("registerCloseBtn");
+const registerFeedback = document.getElementById("registerFeedback");
+const topbarLogoutBtn = document.getElementById("topbarLogoutBtn");
 const pillNav = document.getElementById("pillNav");
+const osBoard = document.getElementById("osBoard");
 const desktopSurface = document.getElementById("desktopSurface");
+const agentBoardList = document.getElementById("agentBoardList");
+const agentCategoryCollapseBtn = document.getElementById("agentCategoryCollapseBtn");
+const desktopSearchStatus = document.getElementById("desktopSearchStatus");
+const agentInsightTitle = document.getElementById("agentInsightTitle");
+const agentInsightDesc = document.getElementById("agentInsightDesc");
+const agentInsightCode = document.getElementById("agentInsightCode");
+const agentInsightPriority = document.getElementById("agentInsightPriority");
+const agentInsightOwner = document.getElementById("agentInsightOwner");
+const agentInsightProject = document.getElementById("agentInsightProject");
+const agentInsightDeadline = document.getElementById("agentInsightDeadline");
+const agentInsightStatus = document.getElementById("agentInsightStatus");
+const agentInsightTags = document.getElementById("agentInsightTags");
+const agentInsightAdvice = document.getElementById("agentInsightAdvice");
+const agentAdviceOpenBtn = document.getElementById("agentAdviceOpenBtn");
+const resourceTokenValue = document.getElementById("resourceTokenValue");
+const resourceTokenProgress = document.getElementById("resourceTokenProgress");
+const resourceTokenPercent = document.getElementById("resourceTokenPercent");
+const resourceModelValue = document.getElementById("resourceModelValue");
+const resourceModelProgress = document.getElementById("resourceModelProgress");
+const resourceModelPercent = document.getElementById("resourceModelPercent");
+const announcementCount = document.getElementById("announcementCount");
+const announcementList = document.getElementById("announcementList");
+const statAgentCount = document.getElementById("statAgentCount");
+const statActiveAgentCount = document.getElementById("statActiveAgentCount");
+const statConversationCount = document.getElementById("statConversationCount");
+const statApiRequestCount = document.getElementById("statApiRequestCount");
+const statUserCount = document.getElementById("statUserCount");
 const transitionOverlay = document.getElementById("transitionOverlay");
 const tabs = ["home", "works", "system"];
+const PROJECT_STATE_ENDPOINT = "/api/project-state";
+const RUNTIME_STATS_ENDPOINT = "/api/runtime-stats";
+const ANNOUNCEMENTS_ENDPOINT = "/api/announcements";
+const MODEL_SETTINGS_ENDPOINT = "/api/model-settings";
+const AGENT_CHAT_ENDPOINT = "/api/agent-chat";
+const SERVER_STORAGE_ENABLED = location.protocol === "http:" || location.protocol === "https:";
 const DESKTOP_ITEMS_KEY = "aiTerminalDesktopItems";
 const DESKTOP_ITEMS_BACKUP_KEY = "aiTerminalDesktopItemsBackup";
+const DASHBOARD_LAYOUT_VERSION_KEY = "aiTerminalAgentDashboardLayout";
+const AGENT_VIEW_MODE_KEY = "aiTerminalAgentViewMode";
+const AGENT_CATEGORY_COLLAPSED_KEY = "aiTerminalAgentCategoriesCollapsed";
+const AGENT_CATEGORY_STATE_KEY = "aiTerminalAgentCategoryState";
+const REGISTRATION_REQUESTS_KEY = "kb-registration-requests";
 const supportedFileTypes = [
   { value: "md", label: "Markdown" },
   { value: "txt", label: "Text" },
@@ -688,13 +1405,41 @@ let openCount = 0;
 let selectedDesktopId = null;
 let selectedDesktopIds = new Set();
 let isMarqueeSelecting = false;
+let agentOrbitPhase = Math.PI / 2;
+let agentOrbitFrame = 0;
+let agentOrbitLast = 0;
+let agentOrbitPaused = false;
+let agentOrbitDragging = false;
+let agentDisplayMode = localStorage.getItem(AGENT_VIEW_MODE_KEY) === "grid" ? "grid" : "orbit";
+let activeAgentCategory = "all";
+let agentStatusFilter = "all";
+let agentSortOrder = "newest";
+let desktopSearchQuery = "";
+let agentCategoriesCollapsed = localStorage.getItem(AGENT_CATEGORY_COLLAPSED_KEY) === "true";
+let agentCategoryState = loadAgentCategoryState();
+let agentCategoryClickTimer = 0;
 let returningToIntro = false;
 let expandingToDesktop = false;
 let returnProgress = 0;
 let returnTargetRect = null;
+let desktopScale = 1;
 const HIDDEN_WORKS_CATEGORIES_KEY = "aiTerminalHiddenWorksCategoriesV2";
 let desktopItems = loadDesktopItems();
+try {
+  if (localStorage.getItem(DASHBOARD_LAYOUT_VERSION_KEY) !== "dashboard-v3") {
+    desktopItems.forEach((item) => {
+      if (!item.parentId) item.autoArrange = true;
+    });
+    const migratedItems = JSON.stringify(desktopItems);
+    localStorage.setItem(DESKTOP_ITEMS_KEY, migratedItems);
+    localStorage.setItem(DESKTOP_ITEMS_BACKUP_KEY, migratedItems);
+    localStorage.setItem(DASHBOARD_LAYOUT_VERSION_KEY, "dashboard-v3");
+  }
+} catch (error) {}
 let hiddenWorksCategories = loadHiddenWorksCategories();
+let serverProjectState = null;
+let projectStateHydrating = false;
+let projectStateSaveTimer = 0;
 
 const fortunes = [
   "找到你喜欢的事，然后让它杀死你。 - Bukowski",
@@ -703,9 +1448,87 @@ const fortunes = [
   "Simplicity is the ultimate sophistication. - Leonardo da Vinci"
 ];
 
+let agentModelOptions = [];
+let activeModelSettings = {
+  preset: "",
+  presetLabel: "",
+  defaultModel: "",
+  models: [],
+  ready: false
+};
+window.__WORKBENCH_MODEL_AVAILABILITY__ = {
+  ready: false,
+  models: [],
+  message: "工作台模型不可用，请先接入 API/模型设置"
+};
+
+function normalizeAgentModelValue(value) {
+  return String(value || "").trim().replace(/^Open WebUI\\s*\\/\\s*/i, "");
+}
+
+function configuredModelOptions(settings = activeModelSettings) {
+  if (!settings.ready) return [];
+  return [normalizeAgentModelValue(settings.defaultModel)].filter(Boolean);
+}
+
+function resolveAgentModelValue(value) {
+  const current = normalizeAgentModelValue(value);
+  const configured = configuredModelOptions();
+  if (!configured.length) return "";
+  const exact = configured.find((option) => option.toLowerCase() === current.toLowerCase());
+  return exact || normalizeAgentModelValue(activeModelSettings.defaultModel) || configured[0];
+}
+
+function agentModelDisplayName(value) {
+  const model = resolveAgentModelValue(value);
+  if (model && model === normalizeAgentModelValue(activeModelSettings.defaultModel) && activeModelSettings.presetLabel) {
+    return activeModelSettings.presetLabel;
+  }
+  const aliases = {
+    "kimi-k3": "Kimi K3"
+  };
+  return aliases[model.toLowerCase()] || model || "未接入模型";
+}
+
+const agentKnowledgeOptions = [
+  "PPT 模板与品牌规范",
+  "当前项目知识库",
+  "全站知识库",
+  "作品集知识库",
+  "私人知识库",
+  "文件夹知识库",
+  "无知识库"
+];
+
+const agentToolOptions = [
+  "PPT大纲",
+  "模板排版",
+  "图表信息页",
+  "图片页",
+  "演讲备注",
+  "PPTX导出",
+  "RAG检索",
+  "文件编辑",
+  "总结",
+  "步骤拆解",
+  "代码说明",
+  "视觉分析",
+  "灵感整理",
+  "方案生成",
+  "文件归档",
+  "项目问答",
+  "目录整理",
+  "复盘",
+  "计划",
+  "长期记忆",
+  "权限",
+  "数据看板",
+  "成员"
+];
+
 const terminalData = [
   { type: "cmd", text: "whoami" },
-  { type: "out", text: "> AI-Terminal-KB" },
+  { type: "out", text: "> Clink AI" },
   { type: "blank" },
   { type: "cmd", text: "cat about.md" },
   { type: "out", text: "> 终端风 AI 个人知识库" },
@@ -714,11 +1537,240 @@ const terminalData = [
   { type: "cmd", text: 'echo "1 person + AI = 1 team"' },
   { type: "gold", text: "> 1 person + AI = 1 team" },
   { type: "blank" },
-  { type: "cmd", text: "open esther-os.app", cursor: true }
+  { type: "cmd", text: "open clink-ai.app", cursor: true }
 ];
 
 renderDesktopItems();
 renderWorksFiles();
+hydrateProjectStateFromServer();
+refreshWorkbenchData();
+setInterval(refreshWorkbenchData, 30000);
+
+window.addEventListener("workbench-status-filter", (event) => {
+  agentStatusFilter = event.detail || "all";
+  renderDesktopItems();
+});
+window.addEventListener("workbench-sort-order", (event) => {
+  agentSortOrder = event.detail || "newest";
+  renderDesktopItems();
+});
+window.addEventListener("workbench-model-settings-updated", (event) => {
+  applyPublicModelSettings(event.detail || {});
+  renderDesktopItems();
+});
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refreshWorkbenchData();
+});
+
+function numberText(value) {
+  return new Intl.NumberFormat("zh-CN").format(Math.max(0, Number(value || 0)));
+}
+
+function animateStatValue(element, targetValue, delay = 0) {
+  if (!element) return;
+  const target = Math.max(0, Math.round(Number(targetValue || 0)));
+  const current = Number(String(element.dataset.value ?? element.textContent ?? "0").replace(/,/g, "")) || 0;
+  if (element.dataset.target === String(target) && !element.classList.contains("is-counting")) return;
+  element.dataset.target = String(target);
+  if (element._countFrame) cancelAnimationFrame(element._countFrame);
+  if (element._countDelay) clearTimeout(element._countDelay);
+  element.classList.remove("is-counting");
+  void element.offsetWidth;
+  element.classList.add("is-counting");
+  element._countDelay = setTimeout(() => {
+    const startedAt = performance.now();
+    const duration = 1350;
+    const tick = (now) => {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const nextValue = Math.round(current + (target - current) * eased);
+      element.textContent = numberText(nextValue);
+      element.dataset.value = String(nextValue);
+      if (progress < 1) {
+        element._countFrame = requestAnimationFrame(tick);
+      } else {
+        element.textContent = numberText(target);
+        element.dataset.value = String(target);
+        element.classList.remove("is-counting");
+        element._countFrame = 0;
+      }
+    };
+    element._countFrame = requestAnimationFrame(tick);
+  }, delay);
+}
+
+function percentage(value, quota) {
+  if (!quota) return 0;
+  return Math.min(100, Math.max(0, Number(value || 0) / quota * 100));
+}
+
+function relativeTime(value) {
+  const timestamp = Date.parse(value || "");
+  if (!Number.isFinite(timestamp)) return "";
+  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+  if (seconds < 60) return "刚刚";
+  if (seconds < 3600) return Math.floor(seconds / 60) + " 分钟前";
+  if (seconds < 86400) return Math.floor(seconds / 3600) + " 小时前";
+  return Math.floor(seconds / 86400) + " 天前";
+}
+
+function applyRuntimeStats(stats = {}) {
+  const tokenQuota = 5000000;
+  const modelQuota = 300000;
+  const tokenRate = percentage(stats.tokenUsage, tokenQuota);
+  const modelRate = percentage(stats.modelCalls, modelQuota);
+  if (resourceTokenValue) resourceTokenValue.innerHTML = numberText(stats.tokenUsage) + " <em>/ " + numberText(tokenQuota) + "</em>";
+  if (resourceTokenProgress) resourceTokenProgress.style.width = tokenRate.toFixed(1) + "%";
+  if (resourceTokenPercent) resourceTokenPercent.textContent = tokenRate.toFixed(1) + "%";
+  if (resourceModelValue) resourceModelValue.innerHTML = numberText(stats.modelCalls) + " <em>/ " + numberText(modelQuota) + "</em>";
+  if (resourceModelProgress) resourceModelProgress.style.width = modelRate.toFixed(1) + "%";
+  if (resourceModelPercent) resourceModelPercent.textContent = modelRate.toFixed(1) + "%";
+  animateStatValue(statAgentCount, stats.agentCount, 0);
+  animateStatValue(statActiveAgentCount, visibleDesktopItems().filter((item) => normalizeAgentProfile(item.agent, item).status === "running" && !item.parentId).length, 80);
+  animateStatValue(statConversationCount, stats.conversations, 160);
+  animateStatValue(statApiRequestCount, stats.apiRequests, 240);
+  animateStatValue(statUserCount, 1, 320);
+}
+
+function renderAnnouncements(items = []) {
+  if (announcementCount) announcementCount.textContent = items.length + " 条";
+  if (!announcementList) return;
+  announcementList.innerHTML = items.length
+    ? items.slice(0, 3).map((item) => '<div class="agent-announcement-row"><i></i><span title="' + escapeHtml(item.content || item.title) + '">' + escapeHtml(item.title) + '</span><time>' + escapeHtml(relativeTime(item.createdAt)) + '</time></div>').join("")
+    : '<div class="agent-announcement-empty">暂无公告</div>';
+  window.dispatchEvent(new CustomEvent("workbench-announcements-updated"));
+}
+
+function applyPublicModelSettings(settings = {}) {
+  const ready = Boolean(
+    settings.ready
+    && settings.hasApiKey
+    && settings.baseUrl
+    && settings.defaultModel
+  );
+  activeModelSettings = {
+    preset: String(settings.preset || ""),
+    presetLabel: String(settings.presetLabel || ""),
+    defaultModel: normalizeAgentModelValue(settings.defaultModel),
+    models: Array.isArray(settings.models)
+      ? settings.models.map(normalizeAgentModelValue).filter(Boolean)
+      : [],
+    availableModels: Array.isArray(settings.availableModels)
+      ? settings.availableModels.map(normalizeAgentModelValue).filter(Boolean)
+      : [],
+    ready
+  };
+  const configured = configuredModelOptions(activeModelSettings);
+  agentModelOptions = configured;
+  const availability = {
+    ready: Boolean(ready && configured.length),
+    models: configured,
+    message: ready && configured.length ? "" : "工作台模型不可用，请先接入 API/模型设置"
+  };
+  window.__WORKBENCH_MODEL_AVAILABILITY__ = availability;
+  window.dispatchEvent(new CustomEvent("workbench-model-availability-sync", { detail: availability }));
+}
+
+async function refreshWorkbenchData() {
+  if (!SERVER_STORAGE_ENABLED) return;
+  const requests = [
+    fetch(RUNTIME_STATS_ENDPOINT).then((response) => response.json()).then((payload) => payload.ok && applyRuntimeStats(payload.data)),
+    fetch(ANNOUNCEMENTS_ENDPOINT).then((response) => response.json()).then((payload) => payload.ok && renderAnnouncements(payload.data)),
+    fetch(MODEL_SETTINGS_ENDPOINT).then((response) => response.json()).then((payload) => {
+      if (!payload.ok) return;
+      applyPublicModelSettings(payload.data);
+      renderDesktopItems();
+    })
+  ];
+  await Promise.allSettled(requests);
+}
+
+window.__WORKBENCH_BRIDGE__ = {
+  saveModelSettings: async (settings) => {
+    const data = {
+      ...settings,
+      adminToken: getAdminTokenValue()
+    };
+    return await new Promise((resolve, reject) => {
+      const frameName = "model-settings-frame-" + Date.now();
+      const frame = document.createElement("iframe");
+      const form = document.createElement("form");
+      const field = document.createElement("input");
+      frame.name = frameName;
+      frame.hidden = true;
+      form.hidden = true;
+      form.method = "POST";
+      form.action = "/api/model-settings-form";
+      form.target = frameName;
+      field.type = "hidden";
+      field.name = "payload";
+      field.value = JSON.stringify(data);
+      form.appendChild(field);
+      document.body.append(frame, form);
+      const cleanup = () => {
+        window.removeEventListener("message", onMessage);
+        frame.remove();
+        form.remove();
+      };
+      const timeout = setTimeout(() => {
+        cleanup();
+        reject(new Error("模型配置保存超时"));
+      }, 10000);
+      const onMessage = (event) => {
+        if (event.origin !== location.origin || event.source !== frame.contentWindow || event.data?.type !== "model-settings-saved") return;
+        clearTimeout(timeout);
+        const payload = event.data.payload || {};
+        cleanup();
+        if (!payload.ok) reject(new Error(payload.message || "模型配置保存失败"));
+        else resolve(payload);
+      };
+      window.addEventListener("message", onMessage);
+      form.submit();
+    });
+  },
+  discoverModels: async (settings) => {
+    const data = {
+      ...settings,
+      adminToken: getAdminTokenValue()
+    };
+    return await new Promise((resolve, reject) => {
+      const frameName = "model-catalog-frame-" + Date.now();
+      const frame = document.createElement("iframe");
+      const form = document.createElement("form");
+      const field = document.createElement("input");
+      frame.name = frameName;
+      frame.hidden = true;
+      form.hidden = true;
+      form.method = "POST";
+      form.action = "/api/model-catalog-form";
+      form.target = frameName;
+      field.type = "hidden";
+      field.name = "payload";
+      field.value = JSON.stringify(data);
+      form.appendChild(field);
+      document.body.append(frame, form);
+      const cleanup = () => {
+        window.removeEventListener("message", onMessage);
+        frame.remove();
+        form.remove();
+      };
+      const timeout = setTimeout(() => {
+        cleanup();
+        reject(new Error("模型检测超时"));
+      }, 20000);
+      const onMessage = (event) => {
+        if (event.origin !== location.origin || event.source !== frame.contentWindow || event.data?.type !== "model-catalog-loaded") return;
+        clearTimeout(timeout);
+        const payload = event.data.payload || {};
+        cleanup();
+        if (!payload.ok) reject(new Error(payload.message || "模型检测失败"));
+        else resolve(payload);
+      };
+      window.addEventListener("message", onMessage);
+      form.submit();
+    });
+  }
+};
 
 function currentTab() {
   const tab = location.hash.replace("#", "");
@@ -728,6 +1780,31 @@ function currentTab() {
 function applyScrollLock() {
   document.documentElement.classList.toggle("scroll-unlocked", currentTab() !== "home" || launched);
   document.body.classList.toggle("desktop-mode", currentTab() === "home" && launched);
+  updateDesktopScale();
+}
+
+function updateDesktopScale() {
+  const designWidth = 1396;
+  const minimumDesignHeight = 930;
+  const topbarHeight = 47;
+  const navReserve = 80;
+  const sidePadding = 40;
+  const widthScale = (window.innerWidth - sidePadding) / designWidth;
+  const availableHeight = Math.max(420, window.innerHeight - topbarHeight - navReserve);
+  const heightScale = availableHeight / minimumDesignHeight;
+  desktopScale = Math.max(0.52, Math.min(2.4, widthScale, heightScale));
+  const designHeight = Math.max(minimumDesignHeight, availableHeight / desktopScale);
+  const boardHeight = designHeight * desktopScale;
+  const availableTop = topbarHeight + 10;
+  const maxTop = Math.max(availableTop, window.innerHeight - navReserve - boardHeight);
+  const top = Math.max(availableTop, Math.min(62, maxTop));
+  document.documentElement.style.setProperty("--desktop-scale", desktopScale.toFixed(4));
+  document.documentElement.style.setProperty("--desktop-top", top.toFixed(1) + "px");
+  document.documentElement.style.setProperty("--desktop-board-height", designHeight.toFixed(1) + "px");
+}
+
+function scaledPointerDelta(delta) {
+  return delta / Math.max(desktopScale, 0.52);
 }
 
 function updateNavIndicator() {
@@ -772,13 +1849,29 @@ function renderIntroLine(item) {
 
 function finishIntro() {
   typingDone = true;
-  heroCta.classList.add("visible");
-  pillNav.classList.remove("hidden-during-intro");
+  syncLaunchAuthState();
   updateNavIndicator();
   requestAnimationFrame(updateNavIndicator);
+  if (new URLSearchParams(location.search).get("launch") === "1" && hasAdminToken()) {
+    requestAnimationFrame(() => launch());
+  }
+}
+
+function syncLaunchAuthState() {
+  const loggedIn = hasAdminToken();
+  heroCta.classList.toggle("visible", loggedIn);
+  heroCta.classList.toggle("hidden", !loggedIn);
+  heroAuthActions.hidden = false;
+  heroAuthActions.classList.toggle("visible", !loggedIn && currentTab() === "home" && !launched);
+  pillNav.classList.toggle("hidden-during-intro", !loggedIn);
+  syncAdminOnlyVisibility();
 }
 
 function startIntro() {
+  if (shouldAutoLaunchDesktop()) {
+    directLaunchDesktop();
+    return;
+  }
   let delay = 0;
   terminalData.forEach((item) => {
     const line = renderIntroLine(item);
@@ -789,23 +1882,49 @@ function startIntro() {
   setTimeout(finishIntro, delay + 350);
 }
 
+function shouldAutoLaunchDesktop() {
+  return new URLSearchParams(location.search).get("launch") === "1" && hasAdminToken() && currentTab() === "home";
+}
+
+function directLaunchDesktop() {
+  typingDone = true;
+  launched = true;
+  returningToIntro = false;
+  expandingToDesktop = false;
+  returnProgress = 0;
+  returnTargetRect = null;
+  resetReturnStyles();
+  hero.classList.add("launched");
+  document.body.classList.add("desktop-mode");
+  document.body.classList.remove("desktop-returning", "return-stable");
+  heroCta.classList.remove("visible");
+  heroCta.classList.add("hidden");
+  transitionOverlay.classList.remove("active");
+  syncLaunchAuthState();
+  applyScrollLock();
+  renderDesktopItems();
+  updateNavIndicator();
+  requestAnimationFrame(updateNavIndicator);
+  window.scrollTo(0, 0);
+  document.documentElement.classList.remove("auto-launching");
+  setTimeout(() => input.focus(), 80);
+}
+
 pillNav.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-tab]");
   if (button) location.hash = button.dataset.tab;
 });
 
 window.addEventListener("hashchange", () => switchTab(currentTab()));
-window.addEventListener("resize", updateNavIndicator);
+window.addEventListener("resize", () => {
+  updateDesktopScale();
+  updateNavIndicator();
+});
 document.addEventListener("wheel", (event) => {
-  if (currentTab() !== "home") return;
-  if (Math.abs(event.deltaY) < 6) return;
-  const canShrink = launched && document.body.classList.contains("desktop-mode");
-  const canExpand = !launched && (expandingToDesktop || (document.body.classList.contains("return-stable") && event.deltaY < 0));
-  if (!canShrink && !canExpand) return;
-  event.preventDefault();
-  if (canShrink) updateReturnProgress(event.deltaY);
-  if (canExpand) updateExpandProgress(event.deltaY);
-}, { passive: false });
+  if (event.target.closest(".os-window")) {
+    event.stopImmediatePropagation();
+  }
+}, { capture: true, passive: true });
 
 document.addEventListener("click", (event) => {
   const tabTrigger = event.target.closest("[data-tab]");
@@ -848,8 +1967,151 @@ document.addEventListener("keydown", (event) => {
 
 launchTarget.addEventListener("click", launch);
 heroCta.addEventListener("click", launch);
+heroLoginBtn.addEventListener("click", redirectToLoginBeforeDesktop);
+heroRegisterBtn.addEventListener("click", openRegisterModal);
+registerCloseBtn.addEventListener("click", closeRegisterModal);
+registerModal.addEventListener("click", (event) => {
+  if (event.target === registerModal) closeRegisterModal();
+});
+registerForm.addEventListener("submit", submitRegistrationRequest);
+topbarLogoutBtn.addEventListener("click", logoutFromDesktop);
+agentAdviceOpenBtn.addEventListener("click", () => {
+  const visibleItems = visibleDesktopItems().filter((item) => !item.parentId);
+  const selectedItem = visibleItems.find((item) => selectedDesktopIds.has(item.id)) || visibleItems[0];
+  if (selectedItem) {
+    setDesktopSelection([selectedItem.id], false);
+    openAgentChatWindow(selectedItem);
+  }
+});
+window.addEventListener("workbench-agent-category-change", (event) => {
+  updateSelectedAgentInsight({ categoryId: String(event.detail || "uncategorized") });
+});
+window.addEventListener("workbench-agent-model-change", (event) => {
+  updateSelectedAgentInsight({ model: String(event.detail || "") });
+});
+window.addEventListener("workbench-agent-knowledge-change", (event) => {
+  updateSelectedAgentInsight({ knowledge: String(event.detail || "") });
+});
+window.addEventListener("workbench-agent-edit-save", (event) => {
+  const values = event.detail || {};
+  const item = desktopItems.find((entry) => entry.id === values.id) || selectedAgentInsightItem();
+  if (!item) return;
+  const agent = normalizeAgentProfile(item.agent, item);
+  item.label = String(values.label || item.label || "未命名智能体").trim();
+  agent.role = String(values.role || agent.role).trim();
+  agent.model = String(values.model || agent.model);
+  agent.knowledge = String(values.knowledge || agent.knowledge);
+  agent.tools = Array.isArray(values.tools) && values.tools.length ? values.tools : agent.tools;
+  agent.categoryId = String(values.categoryId || agent.categoryId || "uncategorized");
+  agentCategoryState.custom.forEach((category) => {
+    category.itemIds = (Array.isArray(category.itemIds) ? category.itemIds : []).filter((id) => id !== item.id);
+    if (category.id === agent.categoryId) category.itemIds.push(item.id);
+  });
+  item.agent = agent;
+  saveAgentCategoryState();
+  saveDesktopItems();
+  syncOpenAgentWindow(item);
+  renderDesktopItems();
+});
+window.addEventListener("workbench-agent-create-save", (event) => {
+  const values = event.detail || {};
+  const label = String(values.label || "新建智能体").trim();
+  const id = "agent-" + Date.now();
+  const categoryId = String(values.categoryId || "uncategorized");
+  const item = {
+    id,
+    label,
+    path: id + ".md",
+    index: String(desktopItems.length + 1).padStart(2, "0"),
+    kind: "doc",
+    windowId: "",
+    x: 80,
+    y: 120,
+    autoArrange: true,
+    source: "desktop",
+    fileType: "md",
+    sourceUrl: "",
+    content: "# " + label + "\\n\\n" + String(values.role || "通用智能体"),
+    agent: {
+      role: String(values.role || "通用智能体").trim(),
+      model: String(values.model || agentModelOptions[0] || ""),
+      knowledge: String(values.knowledge || "MD · " + label),
+      tools: Array.isArray(values.tools) && values.tools.length ? values.tools : agentToolOptions.slice(0, 3),
+      initials: agentInitials(label),
+      status: "running",
+      categoryId
+    }
+  };
+  desktopItems.push(item);
+  agentCategoryState.custom.forEach((category) => {
+    if (category.id === categoryId) {
+      category.itemIds = Array.isArray(category.itemIds) ? category.itemIds : [];
+      category.itemIds.push(id);
+    }
+  });
+  activeAgentCategory = categoryId === "all" ? "all" : categoryId;
+  saveAgentCategoryState();
+  saveDesktopItems();
+  setDesktopSelection([id], false);
+  renderDesktopItems();
+});
+window.addEventListener("workbench-agent-delete", (event) => {
+  const itemId = String(event.detail?.id || "");
+  if (!itemId || !desktopItems.some((item) => item.id === itemId)) return;
+  setDesktopSelection([itemId], false);
+  deleteSelectedDesktopItems();
+});
+agentInsightTags.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-agent-skill]");
+  if (!button) return;
+  const item = selectedAgentInsightItem();
+  if (!item) return;
+  const agent = normalizeAgentProfile(item.agent, item);
+  let selectedTools = [...agent.tools];
+  const skill = button.dataset.agentSkill;
+  if (selectedTools.includes(skill)) {
+    if (selectedTools.length === 1) return;
+    selectedTools = selectedTools.filter((tool) => tool !== skill);
+  } else {
+    selectedTools = [skill, ...selectedTools];
+  }
+  updateSelectedAgentInsight({ tools: selectedTools });
+});
+window.addEventListener("workbench-agent-category-create-request", () => openAgentCategoryDialog());
+window.addEventListener("workbench-agent-category-delete-request", (event) => {
+  deleteAgentCategory(String(event.detail?.id || ""));
+});
+window.addEventListener("workbench-agent-view-change", (event) => {
+  setAgentDisplayMode(event.detail);
+});
+agentCategoryCollapseBtn.addEventListener("click", () => {
+  agentCategoriesCollapsed = !agentCategoriesCollapsed;
+  localStorage.setItem(AGENT_CATEGORY_COLLAPSED_KEY, String(agentCategoriesCollapsed));
+  applyAgentCategoryCollapse();
+});
+agentBoardList.addEventListener("click", (event) => {
+  const trigger = event.target.closest(".agent-board-item");
+  if (!trigger) return;
+  const categoryId = trigger.dataset.category || "all";
+  clearTimeout(agentCategoryClickTimer);
+  agentCategoryClickTimer = setTimeout(() => {
+    activeAgentCategory = categoryId;
+    renderDesktopItems();
+  }, 220);
+});
+agentBoardList.addEventListener("dblclick", (event) => {
+  const trigger = event.target.closest(".agent-board-item");
+  if (!trigger) return;
+  event.preventDefault();
+  clearTimeout(agentCategoryClickTimer);
+  openAgentCategoryDialog(trigger.dataset.category || "all");
+});
 
 appGrid.addEventListener("click", (event) => {
+  if (appGrid.dataset.orbitDragging === "true") {
+    appGrid.dataset.orbitDragging = "";
+    return;
+  }
   if (appGrid.dataset.dragging === "true") {
     appGrid.dataset.dragging = "";
     return;
@@ -858,30 +2120,80 @@ appGrid.addEventListener("click", (event) => {
     appGrid.dataset.marquee = "";
     return;
   }
+  const chatButton = event.target.closest(".agent-chat-btn");
+  if (chatButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    const item = desktopItems.find((entry) => entry.id === chatButton.dataset.id);
+    if (item) {
+      setDesktopSelection([item.id], false);
+      openAgentChatWindow(item);
+    }
+    return;
+  }
   const card = event.target.closest(".app-card");
   if (!card) {
     setDesktopSelection([]);
     return;
   }
-  setDesktopSelection([card.dataset.id]);
-  renderDesktopItems();
+  setDesktopSelection([card.dataset.id], false);
+});
+
+appGrid.addEventListener("pointerover", (event) => {
+  const card = event.target.closest(".agent-card");
+  if (agentDisplayMode !== "orbit" || agentOrbitDragging || !card || card.contains(event.relatedTarget)) return;
+  appGrid.querySelectorAll(".agent-card.orbit-hovered").forEach((node) => node.classList.remove("orbit-hovered"));
+  card.classList.add("orbit-hovered");
+  agentOrbitPaused = true;
+});
+
+appGrid.addEventListener("pointerout", (event) => {
+  const card = event.target.closest(".agent-card");
+  if (agentDisplayMode !== "orbit" || agentOrbitDragging || !card || card.contains(event.relatedTarget)) return;
+  card.classList.remove("orbit-hovered");
+  const nextCard = event.relatedTarget?.closest?.(".agent-card");
+  if (nextCard) {
+    nextCard.classList.add("orbit-hovered");
+    agentOrbitPaused = true;
+    return;
+  }
+  agentOrbitPaused = false;
+});
+
+appGrid.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const card = event.target.closest(".agent-card");
+  if (!card || event.target.closest(".agent-chat-btn")) return;
+  event.preventDefault();
+  setDesktopSelection([card.dataset.id], false);
 });
 
 appGrid.addEventListener("dblclick", (event) => {
+  if (event.target.closest(".agent-chat-btn")) return;
   const card = event.target.closest(".app-card");
   if (!card) return;
   const item = desktopItems.find((entry) => entry.id === card.dataset.id);
   if (!item) return;
+  if (item.kind === "link" && item.url) {
+    window.open(item.url, "_blank");
+    return;
+  }
   if (card.dataset.window) {
     openWindow(card.dataset.window);
+    return;
+  }
+  if (card.dataset.folder) {
+    openDesktopFolderWindow(item);
     return;
   }
   openDocumentWindow(item);
 });
 
 appGrid.addEventListener("pointerdown", (event) => {
+  if (event.target.closest(".agent-chat-btn")) return;
   const card = event.target.closest(".app-card");
   if (!card || !document.body.classList.contains("desktop-mode")) return;
+  if (card.classList.contains("agent-card")) return;
   const item = desktopItems.find((entry) => entry.id === card.dataset.id);
   if (!item) return;
   if (!selectedDesktopIds.has(item.id)) setDesktopSelection([item.id], false);
@@ -895,19 +2207,34 @@ appGrid.addEventListener("pointerdown", (event) => {
   let nextDeltaY = 0;
   let moved = false;
   let frame = 0;
+  let folderTargetId = "";
   dragCards.forEach((node) => node.classList.add("dragging", "realtime-drag"));
+  const clearFolderTargets = () => {
+    appGrid.querySelectorAll(".folder-drop-target").forEach((node) => node.classList.remove("folder-drop-target"));
+  };
   const move = (moveEvent) => {
     moved = true;
-    nextDeltaX = moveEvent.clientX - startX;
-    nextDeltaY = moveEvent.clientY - startY;
+    nextDeltaX = scaledPointerDelta(moveEvent.clientX - startX);
+    nextDeltaY = scaledPointerDelta(moveEvent.clientY - startY);
+    dragCards.forEach((node) => {
+      node.style.pointerEvents = "none";
+    });
+    const targetCard = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY)?.closest('.app-card[data-folder]');
+    dragCards.forEach((node) => {
+      node.style.pointerEvents = "";
+    });
+    folderTargetId = targetCard && !dragIds.includes(targetCard.dataset.id) ? targetCard.dataset.id : "";
+    clearFolderTargets();
+    if (folderTargetId) targetCard.classList.add("folder-drop-target");
     if (frame) return;
     frame = requestAnimationFrame(() => {
       frame = 0;
       dragCards.forEach((node) => {
         const origin = startPositions.get(node.dataset.id);
         if (!origin) return;
-        const targetX = Math.max(8, Math.min(window.innerWidth - 86, origin.x + nextDeltaX));
-        const targetY = Math.max(42, Math.min(window.innerHeight - 116, origin.y + nextDeltaY));
+        const point = clampDesktopPoint(origin.x + nextDeltaX, origin.y + nextDeltaY);
+        const targetX = point.x;
+        const targetY = point.y;
         node.style.transform = "translate3d(" + (targetX - origin.x) + "px," + (targetY - origin.y) + "px,0)";
       });
     });
@@ -917,25 +2244,33 @@ appGrid.addEventListener("pointerdown", (event) => {
     document.removeEventListener("pointerup", up);
     if (frame) cancelAnimationFrame(frame);
     if (moved) {
-      dragItems.forEach((entry) => {
-        const origin = startPositions.get(entry.id);
-        if (!origin) return;
-        entry.x = Math.max(8, Math.min(window.innerWidth - 86, origin.x + nextDeltaX));
-        entry.y = Math.max(42, Math.min(window.innerHeight - 116, origin.y + nextDeltaY));
-        entry.autoArrange = false;
-      });
+      if (folderTargetId) {
+        moveItemsIntoFolder(dragItems, folderTargetId);
+      } else {
+        dragItems.forEach((entry) => {
+          const origin = startPositions.get(entry.id);
+          if (!origin) return;
+          const point = clampDesktopPoint(origin.x + nextDeltaX, origin.y + nextDeltaY);
+          entry.x = point.x;
+          entry.y = point.y;
+          entry.autoArrange = false;
+        });
+      }
       appGrid.dataset.dragging = "true";
       saveDesktopItems();
     }
+    clearFolderTargets();
     dragCards.forEach((node) => {
       const entry = desktopItems.find((candidate) => candidate.id === node.dataset.id);
       node.style.transform = "";
+      node.style.pointerEvents = "";
       if (entry) {
         node.style.left = entry.x + "px";
         node.style.top = entry.y + "px";
       }
       node.classList.remove("dragging", "realtime-drag");
     });
+    if (moved) renderDesktopItems();
   };
   document.addEventListener("pointermove", move);
   document.addEventListener("pointerup", up);
@@ -944,15 +2279,28 @@ appGrid.addEventListener("pointerdown", (event) => {
 appGrid.addEventListener("pointerdown", (event) => {
   if (!document.body.classList.contains("desktop-mode")) return;
   if (event.button !== 0 || event.target.closest(".app-card") || event.target.closest(".desktop-tools") || event.target.closest(".os-window")) return;
+  const surfaceRect = desktopSurface.getBoundingClientRect();
   const startX = event.clientX;
   const startY = event.clientY;
+  const startOrbitPhase = agentOrbitPhase;
   let selectionBox = null;
   let moved = false;
   let frame = 0;
   let nextBox = { left: startX, top: startY, width: 0, height: 0 };
   let selecting = false;
+  let gestureMode = "";
+  const startOrbitDrag = () => {
+    if (gestureMode === "orbit") return;
+    gestureMode = "orbit";
+    moved = true;
+    agentOrbitDragging = true;
+    agentOrbitPaused = true;
+    appGrid.classList.add("orbit-dragging");
+    appGrid.querySelectorAll(".agent-card.orbit-hovered").forEach((card) => card.classList.remove("orbit-hovered"));
+  };
   const startSelecting = () => {
     if (selecting) return;
+    gestureMode = "select";
     selecting = true;
     moved = true;
     isMarqueeSelecting = true;
@@ -961,13 +2309,13 @@ appGrid.addEventListener("pointerdown", (event) => {
     selectionBox.className = "selection-box";
     selectionBox.style.width = "0px";
     selectionBox.style.height = "0px";
-    selectionBox.style.transform = "translate3d(" + startX + "px," + startY + "px,0)";
+    selectionBox.style.transform = "translate3d(" + (startX - surfaceRect.left) + "px," + (startY - surfaceRect.top) + "px,0)";
     desktopSurface.appendChild(selectionBox);
   };
   const paint = () => {
     frame = 0;
     if (!selectionBox) return;
-    selectionBox.style.transform = "translate3d(" + nextBox.left + "px," + nextBox.top + "px,0)";
+    selectionBox.style.transform = "translate3d(" + (nextBox.left - surfaceRect.left) + "px," + (nextBox.top - surfaceRect.top) + "px,0)";
     selectionBox.style.width = nextBox.width + "px";
     selectionBox.style.height = nextBox.height + "px";
     const box = { left: nextBox.left, top: nextBox.top, right: nextBox.left + nextBox.width, bottom: nextBox.top + nextBox.height };
@@ -980,7 +2328,17 @@ appGrid.addEventListener("pointerdown", (event) => {
   const move = (moveEvent) => {
     const deltaX = moveEvent.clientX - startX;
     const deltaY = moveEvent.clientY - startY;
-    if (!selecting && Math.hypot(deltaX, deltaY) < 8) return;
+    if (!gestureMode && Math.hypot(deltaX, deltaY) < 8) return;
+    if (!gestureMode && agentDisplayMode === "orbit" && Math.abs(deltaX) > Math.abs(deltaY) * 1.15) {
+      startOrbitDrag();
+    }
+    if (!gestureMode) startSelecting();
+    if (gestureMode === "orbit") {
+      moveEvent.preventDefault();
+      agentOrbitPhase = (startOrbitPhase + deltaX * 0.008) % (Math.PI * 2);
+      layoutAgentOrbitCards();
+      return;
+    }
     startSelecting();
     const left = Math.min(startX, moveEvent.clientX);
     const top = Math.min(startY, moveEvent.clientY);
@@ -992,6 +2350,18 @@ appGrid.addEventListener("pointerdown", (event) => {
   const up = () => {
     document.removeEventListener("pointermove", move);
     document.removeEventListener("pointerup", up);
+    document.removeEventListener("pointercancel", up);
+    if (gestureMode === "orbit") {
+      agentOrbitDragging = false;
+      agentOrbitPaused = false;
+      agentOrbitLast = 0;
+      appGrid.classList.remove("orbit-dragging");
+      appGrid.dataset.orbitDragging = "true";
+      setTimeout(() => {
+        if (appGrid.dataset.orbitDragging === "true") appGrid.dataset.orbitDragging = "";
+      }, 0);
+      return;
+    }
     if (frame) {
       cancelAnimationFrame(frame);
       paint();
@@ -1007,15 +2377,26 @@ appGrid.addEventListener("pointerdown", (event) => {
   };
   document.addEventListener("pointermove", move);
   document.addEventListener("pointerup", up);
+  document.addEventListener("pointercancel", up);
 });
 
-desktopSearch.addEventListener("input", renderDesktopItems);
+window.addEventListener("workbench-agent-search-change", (event) => {
+  desktopSearchQuery = String(event.detail || "");
+  renderDesktopItems();
+});
 window.addEventListener("resize", () => {
+  updateDesktopScale();
   if (document.body.classList.contains("desktop-mode")) renderDesktopItems();
 });
-newFileBtn.addEventListener("click", () => openEditorWindow());
+newFileBtn.addEventListener("click", () => {
+  window.dispatchEvent(new CustomEvent("workbench-agent-create-open", {
+    detail: { categoryId: activeAgentCategory }
+  }));
+});
 worksAddFileBtn.addEventListener("click", () => openEditorWindow(null, document.body, "works"));
-worksCanvasRecordsBtn.addEventListener("click", () => openWorksInfiniteCanvas());
+homeCanvasBtn.addEventListener("click", () => openWorksInfiniteCanvas());
+desktopHelpDocsBtn?.addEventListener("click", () => openHelpDocsWindow());
+worksCanvasRecordsBtn?.addEventListener("click", () => openWorksInfiniteCanvas());
 deleteFileBtn.addEventListener("click", () => {
   deleteSelectedDesktopItems();
 });
@@ -1027,7 +2408,7 @@ function deleteSelectedDesktopItems() {
   const items = getSelectedDesktopItems();
   if (!items.length) return;
   items.forEach((item) => {
-    const openDoc = desktopSurface.querySelector('.os-window[data-doc="' + normalizePath(item.path) + '"]');
+    const openDoc = document.querySelector('.os-window[data-doc="' + normalizePath(item.path) + '"]');
     if (openDoc) openDoc.remove();
   });
   const deleteIds = new Set(items.map((item) => item.id));
@@ -1185,6 +2566,10 @@ function launch() {
     return;
   }
   if (launched || currentTab() !== "home") return;
+  if (!hasAdminToken()) {
+    syncLaunchAuthState();
+    return;
+  }
   returningToIntro = false;
   returnProgress = 0;
   returnTargetRect = null;
@@ -1209,6 +2594,109 @@ function launch() {
     transitionOverlay.classList.remove("active");
     setTimeout(() => input.focus(), 250);
   }, 420);
+}
+
+function hasAdminToken() {
+  return document.cookie.split(";").some((item) => item.trim().startsWith("Admin-Token=")) || Boolean(localStorage.getItem("Admin-Token"));
+}
+
+function getAdminTokenValue() {
+  const cookie = document.cookie.split(";").map((item) => item.trim()).find((item) => item.startsWith("Admin-Token="));
+  return cookie ? decodeURIComponent(cookie.split("=").slice(1).join("=")) : localStorage.getItem("Admin-Token") || "";
+}
+
+function isAdminUser() {
+  return getAdminTokenValue() === "admin-token";
+}
+
+function syncAdminOnlyVisibility() {
+  const loggedIn = hasAdminToken();
+  document.querySelectorAll("[data-admin-only]").forEach((node) => {
+    node.classList.toggle("admin-only-hidden", !isAdminUser());
+  });
+  document.querySelectorAll("[data-guest-only]").forEach((node) => {
+    node.classList.toggle("guest-only-hidden", loggedIn);
+  });
+  document.querySelectorAll("[data-logged-in-only]").forEach((node) => {
+    node.classList.toggle("logged-in-only-hidden", !loggedIn);
+  });
+}
+
+function redirectToLoginBeforeDesktop() {
+  const returnUrl = new URL(location.href);
+  returnUrl.searchParams.set("launch", "1");
+  returnUrl.hash = "home";
+  location.href = "./admin/index.html#/login?redirect=" + encodeURIComponent(returnUrl.href);
+}
+
+function logoutFromDesktop() {
+  document.cookie = "Admin-Token=; Max-Age=0; path=/";
+  localStorage.removeItem("Admin-Token");
+  launched = false;
+  returningToIntro = false;
+  expandingToDesktop = false;
+  returnProgress = 0;
+  hero.classList.remove("launched");
+  document.body.classList.remove("desktop-mode", "desktop-returning", "return-stable");
+  heroCta.classList.remove("visible");
+  heroCta.classList.add("hidden");
+  pillNav.classList.add("hidden-during-intro");
+  resetReturnStyles();
+  syncLaunchAuthState();
+  window.scrollTo(0, 0);
+}
+
+function openRegisterModal() {
+  registerFeedback.textContent = "";
+  registerModal.hidden = false;
+  setTimeout(() => document.getElementById("registerName").focus(), 30);
+}
+
+function closeRegisterModal() {
+  registerModal.hidden = true;
+}
+
+function loadRegistrationRequests() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(REGISTRATION_REQUESTS_KEY) || "[]");
+    return Array.isArray(saved) ? saved : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function submitRegistrationRequest(event) {
+  event.preventDefault();
+  const name = document.getElementById("registerName").value.trim();
+  const account = document.getElementById("registerAccount").value.trim();
+  const password = document.getElementById("registerPassword").value.trim();
+  const email = document.getElementById("registerEmail").value.trim();
+  const message = document.getElementById("registerMessage").value.trim();
+  if (!name || !account || !password || !email) {
+    registerFeedback.textContent = "请填写姓名、账号、密码和邮箱。";
+    return;
+  }
+  const requests = loadRegistrationRequests();
+  const duplicate = requests.some((item) => item.account === account && item.status === "待审核");
+  if (duplicate) {
+    registerFeedback.textContent = "该账号已有待审核申请，请等待管理员处理。";
+    return;
+  }
+  requests.unshift({
+    id: "req-" + Date.now(),
+    name,
+    account,
+    password,
+    email,
+    message,
+    role: "编辑者",
+    status: "待审核",
+    createdAt: new Date().toLocaleString("zh-CN", { hour12: false })
+  });
+  localStorage.setItem(REGISTRATION_REQUESTS_KEY, JSON.stringify(requests));
+  registerForm.reset();
+  registerFeedback.textContent = "申请已提交，等待管理员审核。";
+  setTimeout(closeRegisterModal, 900);
 }
 
 function returnToIntroFromDesktop() {
@@ -1336,7 +2824,7 @@ function finishReturnToIntro() {
   returningToIntro = true;
   returnProgress = 1;
   setDesktopSelection([], false);
-  desktopSurface.querySelectorAll(".os-window").forEach((win) => win.remove());
+  document.querySelectorAll(".os-window.product-window-centered").forEach((win) => win.remove());
   hero.classList.remove("launched");
   heroCta.classList.remove("hidden");
   heroCta.classList.add("visible");
@@ -1378,7 +2866,7 @@ function setIntroTerminalOpacity(value) {
 }
 
 function defaultDesktopItems() {
-  return navItems.map(([label, path, index], itemIndex) => {
+  const items = navItems.map(([label, path, index], itemIndex) => {
     const windowMap = {
       "Design Skill": "win-design-skill",
       "Work With Me": "win-work",
@@ -1395,9 +2883,51 @@ function defaultDesktopItems() {
       x: point.x,
       y: point.y,
       autoArrange: true,
-      content: ""
+      content: "",
+      agent: agentProfileFor({ label, path, index, kind: windowMap[label] ? "window" : "doc" })
     };
   });
+  const pptPoint = desktopRightSlot(items.length);
+  items.push({
+    id: "agent-ppt-general",
+    label: "通用PPT生成",
+    path: "clink-ppt-agent.md",
+    index: String(items.length + 1).padStart(2, "0"),
+    kind: "doc",
+    windowId: "",
+    x: pptPoint.x,
+    y: pptPoint.y,
+    autoArrange: true,
+    fileType: "md",
+    content: "# 通用PPT生成\\n\\n结合 Presenton、PPTAgent 的工作流能力，并由 PptxGenJS 输出可编辑 PPTX。",
+    agent: {
+      role: "演示文稿生成智能体",
+      model: "Qwen3",
+      knowledge: "PPT 模板与品牌规范",
+      tools: ["PPT大纲", "模板排版", "图表信息页", "图片页", "演讲备注", "PPTX导出"],
+      initials: "PPT",
+      status: "running",
+      categoryId: "uncategorized"
+    }
+  });
+  if (isAdminUser()) {
+    const adminPoint = desktopRightSlot(items.length);
+    items.push({
+      id: "item-admin",
+      label: "后台管理",
+      path: "admin.html",
+      index: String(items.length + 1).padStart(2, "0"),
+      kind: "link",
+      url: "./admin.html",
+      x: adminPoint.x,
+      y: adminPoint.y,
+      autoArrange: true,
+      fileType: "html",
+      content: "登录页面、成员权限控制、数据概览监控",
+      agent: agentProfileFor({ label: "后台管理", path: "admin.html", kind: "link", fileType: "html" })
+    });
+  }
+  return items;
 }
 
 function normalizeDesktopItem(item, fallbackIndex) {
@@ -1416,78 +2946,132 @@ function normalizeDesktopItem(item, fallbackIndex) {
     y: Number(item?.y) || 120,
     autoArrange: true,
     fileType: type,
-    content: String(item?.content || "")
+    content: String(item?.content || ""),
+    createdAt: item?.createdAt || new Date(Date.now() - fallbackIndex * 86400000).toISOString(),
+    agent: normalizeAgentProfile(item?.agent, { ...item, id, label, path: item?.path || id + "." + type, fileType: type, kind: item?.kind || "doc" })
   };
 }
 
-function loadDesktopItems() {
+function normalizeDesktopItemsCollection(saved, persistCleanup) {
   const defaults = defaultDesktopItems();
+  if (!Array.isArray(saved) || !saved.length) return defaults;
+  const cleanupLabels = new Set([
+    "作品集拖入修复验证-临时",
+    "作品集分类最终验证-临时",
+    "作品集分类拖入验证-临时",
+    "作品集分类拖拽测试文件",
+    "作品集分类测试文件"
+  ]);
+  let changed = false;
+  const normalized = saved
+    .filter((item) => {
+      const keep = !cleanupLabels.has(item.label);
+      if (!keep) changed = true;
+      return keep;
+    })
+    .map((item, index) => {
+      if (item.autoArrange !== true) changed = true;
+      const normalizedItem = normalizeDesktopItem(item, index);
+      if (!item.path || !item.label || !item.id) changed = true;
+      return normalizedItem;
+    });
+  const byId = new Map(normalized.map((item) => [item.id, item]));
+  const merged = defaults.map((item) => {
+    if (!byId.has(item.id)) return item;
+    const savedItem = byId.get(item.id);
+    return { ...item, ...savedItem, autoArrange: savedItem.autoArrange === false ? false : true };
+  });
+  defaults.forEach((item) => byId.delete(item.id));
+  const cleaned = [...merged, ...[...byId.values()]];
+  if (cleaned.length !== normalized.length) changed = true;
+  if (changed && persistCleanup) {
+    try {
+      localStorage.setItem(DESKTOP_ITEMS_KEY, JSON.stringify(cleaned));
+      localStorage.setItem(DESKTOP_ITEMS_BACKUP_KEY, JSON.stringify(cleaned));
+    } catch (error) {}
+  }
+  return cleaned;
+}
+
+function loadDesktopItems() {
   try {
     const primary = JSON.parse(localStorage.getItem(DESKTOP_ITEMS_KEY) || "null");
     const backup = JSON.parse(localStorage.getItem(DESKTOP_ITEMS_BACKUP_KEY) || "null");
     const saved = Array.isArray(primary) && primary.length ? primary : Array.isArray(backup) && backup.length ? backup : primary;
-    if (Array.isArray(saved) && saved.length) {
-      const cleanupLabels = new Set([
-        "作品集拖入修复验证-临时",
-        "作品集分类最终验证-临时",
-        "作品集分类拖入验证-临时",
-        "作品集分类拖拽测试文件",
-        "作品集分类测试文件"
-      ]);
-      let changed = false;
-      const normalized = saved
-        .filter((item) => {
-          const keep = !cleanupLabels.has(item.label);
-          if (!keep) changed = true;
-          return keep;
-        })
-        .map((item, index) => {
-          if (item.autoArrange !== true) changed = true;
-          const normalizedItem = normalizeDesktopItem(item, index);
-          if (!item.path || !item.label || !item.id) changed = true;
-          return normalizedItem;
-        });
-      const byId = new Map(normalized.map((item) => [item.id, item]));
-      const merged = defaults.map((item) => byId.has(item.id) ? { ...item, ...byId.get(item.id), autoArrange: true } : item);
-      defaults.forEach((item) => byId.delete(item.id));
-      const cleaned = [...merged, ...[...byId.values()]];
-      if (cleaned.length !== normalized.length) changed = true;
-      if (changed) {
-        localStorage.setItem(DESKTOP_ITEMS_KEY, JSON.stringify(cleaned));
-        localStorage.setItem(DESKTOP_ITEMS_BACKUP_KEY, JSON.stringify(cleaned));
-      }
-      return cleaned;
-    }
+    if (Array.isArray(saved) && saved.length) return normalizeDesktopItemsCollection(saved, true);
   } catch (error) {}
-  return defaults;
+  return defaultDesktopItems();
 }
 
 function desktopRightSlot(itemIndex) {
-  const top = 52;
-  const bottom = 122;
-  const colWidth = 88;
-  const rowHeight = 92;
-  const rows = Math.max(1, Math.floor((window.innerHeight - top - bottom) / rowHeight));
-  const col = Math.floor(itemIndex / rows);
-  const row = itemIndex % rows;
+  const bounds = desktopCanvasBounds(itemIndex + 1);
+  const metrics = desktopGridMetrics(bounds.width);
+  const cols = metrics.cols;
+  const col = itemIndex % cols;
+  const row = Math.floor(itemIndex / cols);
   return {
-    x: Math.max(8, window.innerWidth - 92 - col * colWidth),
-    y: Math.min(window.innerHeight - 116, top + row * rowHeight)
+    x: Math.min(bounds.maxX, metrics.left + col * metrics.colWidth),
+    y: Math.min(bounds.maxY, metrics.top + row * metrics.rowHeight)
   };
 }
 
 function applyDesktopRightLayout() {
-  const arrangedItems = desktopItems;
+  const arrangedItems = desktopItems.filter((item) => !item.parentId);
   arrangedItems.forEach((item, index) => {
+    if (item.autoArrange === false) return;
     const point = desktopRightSlot(index);
     item.x = point.x;
     item.y = point.y;
     item.autoArrange = true;
   });
   desktopItems.forEach((item) => {
-    item.x = Math.max(8, Math.min(window.innerWidth - 86, Number(item.x) || 8));
-    item.y = Math.max(42, Math.min(window.innerHeight - 116, Number(item.y) || 42));
+    const point = clampDesktopPoint(Number(item.x) || 8, Number(item.y) || 42);
+    item.x = point.x;
+    item.y = point.y;
   });
+}
+
+function desktopCanvasBounds(itemCount = 0) {
+  const width = Math.max(360, appGrid?.clientWidth || desktopSurface?.clientWidth || window.innerWidth);
+  const height = Math.max(420, appGrid?.clientHeight || desktopSurface?.clientHeight || window.innerHeight);
+  const metrics = desktopGridMetrics(width);
+  const arrangedCount = itemCount || visibleDesktopItems().filter((item) => !item.parentId).length || desktopItems.filter((item) => !item.parentId).length || 1;
+  const rows = Math.max(1, Math.ceil(arrangedCount / metrics.cols));
+  const virtualHeight = Math.max(height, metrics.top + rows * metrics.rowHeight + 30);
+  return {
+    width,
+    height: virtualHeight,
+    maxX: Math.max(8, width - metrics.cardWidth - 8),
+    maxY: Math.max(42, virtualHeight - metrics.cardHeight - 14),
+    virtualHeight
+  };
+}
+
+function clampDesktopPoint(x, y) {
+  const bounds = desktopCanvasBounds();
+  return {
+    x: Math.max(8, Math.min(bounds.maxX, x)),
+    y: Math.max(42, Math.min(bounds.maxY, y))
+  };
+}
+
+function desktopGridMetrics(width) {
+  const left = 14;
+  const top = 72;
+  const cardWidth = 150;
+  const usableWidth = Math.max(1, width - left - 14);
+  const compactFiveColumnStep = Math.max(156, Math.floor(usableWidth / 5));
+  const colWidth = width >= 780 ? compactFiveColumnStep : 166;
+  const rowHeight = 188;
+  return {
+    left,
+    top,
+    colWidth,
+    rowHeight,
+    cardWidth,
+    cardHeight: 168,
+    cols: Math.max(1, Math.floor((width - left) / colWidth))
+  };
 }
 
 function saveDesktopItems() {
@@ -1496,6 +3080,7 @@ function saveDesktopItems() {
     localStorage.setItem(DESKTOP_ITEMS_KEY, payload);
     localStorage.setItem(DESKTOP_ITEMS_BACKUP_KEY, payload);
   } catch (error) {}
+  scheduleProjectStateSave();
 }
 
 function loadHiddenWorksCategories() {
@@ -1511,6 +3096,91 @@ function saveHiddenWorksCategories() {
   try {
     localStorage.setItem(HIDDEN_WORKS_CATEGORIES_KEY, JSON.stringify([...hiddenWorksCategories]));
   } catch (error) {}
+  scheduleProjectStateSave();
+}
+
+function currentWorksCanvasStateForSync() {
+  try {
+    const state = JSON.parse(localStorage.getItem(WORKS_CANVAS_KEY) || "null");
+    if (state?.layers?.length && state?.cards?.length) return state;
+  } catch (error) {}
+  return null;
+}
+
+function projectStateSnapshot() {
+  return {
+    version: 1,
+    desktopItems,
+    hiddenWorksCategories: [...hiddenWorksCategories],
+    worksCanvas: currentWorksCanvasStateForSync()
+  };
+}
+
+function cacheProjectStateLocally(state) {
+  try {
+    localStorage.setItem(DESKTOP_ITEMS_KEY, JSON.stringify(state.desktopItems || desktopItems));
+    localStorage.setItem(DESKTOP_ITEMS_BACKUP_KEY, JSON.stringify(state.desktopItems || desktopItems));
+    localStorage.setItem(HIDDEN_WORKS_CATEGORIES_KEY, JSON.stringify(state.hiddenWorksCategories || [...hiddenWorksCategories]));
+    if (state.worksCanvas) localStorage.setItem(WORKS_CANVAS_KEY, JSON.stringify(state.worksCanvas));
+  } catch (error) {}
+}
+
+async function hydrateProjectStateFromServer() {
+  if (!SERVER_STORAGE_ENABLED) return;
+  projectStateHydrating = true;
+  try {
+    const response = await fetch(PROJECT_STATE_ENDPOINT, { headers: { Accept: "application/json" } });
+    const payload = await response.json();
+    if (!response.ok || payload.ok === false) throw new Error(payload.message || "服务器数据读取失败");
+    const state = payload.data || {};
+    serverProjectState = state;
+    const hasServerData = Array.isArray(state.desktopItems) || Array.isArray(state.hiddenWorksCategories) || !!state.worksCanvas;
+    if (Array.isArray(state.desktopItems) && state.desktopItems.length) {
+      desktopItems = normalizeDesktopItemsCollection(state.desktopItems, false);
+    }
+    if (Array.isArray(state.hiddenWorksCategories)) {
+      hiddenWorksCategories = new Set(state.hiddenWorksCategories);
+    }
+    if (state.worksCanvas?.layers?.length && state.worksCanvas?.cards?.length) {
+      localStorage.setItem(WORKS_CANVAS_KEY, JSON.stringify(state.worksCanvas));
+    }
+    cacheProjectStateLocally(projectStateSnapshot());
+    renderDesktopItems();
+    renderWorksFiles();
+    renderWorksCanvas();
+    projectStateHydrating = false;
+    if (!hasServerData) scheduleProjectStateSave(0);
+  } catch (error) {
+    projectStateHydrating = false;
+    console.warn("Project state server sync unavailable:", error.message || error);
+  }
+}
+
+function scheduleProjectStateSave(delay = 350) {
+  if (!SERVER_STORAGE_ENABLED || projectStateHydrating) return;
+  clearTimeout(projectStateSaveTimer);
+  projectStateSaveTimer = setTimeout(saveProjectStateToServer, delay);
+}
+
+async function saveProjectStateToServer() {
+  if (!SERVER_STORAGE_ENABLED || projectStateHydrating) return;
+  const state = projectStateSnapshot();
+  cacheProjectStateLocally(state);
+  try {
+    const response = await fetch(PROJECT_STATE_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json"
+      },
+      body: JSON.stringify({ data: state })
+    });
+    const payload = await response.json();
+    if (!response.ok || payload.ok === false) throw new Error(payload.message || "服务器数据保存失败");
+    serverProjectState = payload.data || state;
+  } catch (error) {
+    console.warn("Project state save failed, kept local backup:", error.message || error);
+  }
 }
 
 function renderWorksCategories() {
@@ -1520,13 +3190,412 @@ function renderWorksCategories() {
   });
 }
 
+function applyAgentDisplayMode() {
+  const gridMode = agentDisplayMode === "grid";
+  appGrid.classList.toggle("grid-view", gridMode);
+  appGrid.classList.toggle("orbit-view", !gridMode);
+  window.__WORKBENCH_AGENT_VIEW_MODE__ = agentDisplayMode;
+  window.dispatchEvent(new CustomEvent("workbench-agent-view-sync", { detail: agentDisplayMode }));
+}
+
+function setAgentDisplayMode(mode) {
+  agentDisplayMode = mode === "grid" ? "grid" : "orbit";
+  agentOrbitPaused = false;
+  appGrid.querySelectorAll(".agent-card.orbit-hovered").forEach((card) => card.classList.remove("orbit-hovered"));
+  localStorage.setItem(AGENT_VIEW_MODE_KEY, agentDisplayMode);
+  applyAgentDisplayMode();
+  if (agentDisplayMode === "orbit") layoutAgentOrbitCards();
+}
+
+function layoutAgentOrbitCards() {
+  if (agentDisplayMode !== "orbit") return;
+  const cards = [...appGrid.querySelectorAll(".agent-card")];
+  const total = cards.length;
+  if (!total) return;
+  const radiusX = Math.min(300, Math.max(215, appGrid.clientWidth * 0.34));
+  const radiusY = Math.min(102, Math.max(72, appGrid.clientHeight * 0.16));
+  cards.forEach((card, index) => {
+    const angle = agentOrbitPhase + index / total * Math.PI * 2;
+    const depth = (Math.sin(angle) + 1) / 2;
+    const x = Math.cos(angle) * radiusX;
+    const y = Math.sin(angle) * radiusY;
+    const z = depth * 160 - 70;
+    const scale = 0.72 + depth * 0.28;
+    const opacity = 0.52 + depth * 0.48;
+    const tilt = Math.cos(angle) * -16;
+    card.style.setProperty("--orbit-x", x.toFixed(2) + "px");
+    card.style.setProperty("--orbit-y", y.toFixed(2) + "px");
+    card.style.setProperty("--orbit-z", z.toFixed(2) + "px");
+    card.style.setProperty("--orbit-scale", scale.toFixed(3));
+    card.style.setProperty("--orbit-opacity", opacity.toFixed(3));
+    card.style.setProperty("--orbit-tilt", tilt.toFixed(2) + "deg");
+    card.style.setProperty("--orbit-order", String(120 + Math.round(depth * 260)));
+  });
+}
+
+function animateAgentOrbit(timestamp) {
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!agentOrbitLast) agentOrbitLast = timestamp;
+  const delta = Math.min(48, timestamp - agentOrbitLast);
+  agentOrbitLast = timestamp;
+  if (document.body.classList.contains("desktop-mode") && agentDisplayMode === "orbit" && !agentOrbitPaused && !reducedMotion) {
+    agentOrbitPhase = (agentOrbitPhase + delta * 0.00007) % (Math.PI * 2);
+  }
+  layoutAgentOrbitCards();
+  agentOrbitFrame = requestAnimationFrame(animateAgentOrbit);
+}
+
+agentOrbitFrame = requestAnimationFrame(animateAgentOrbit);
+
+function loadAgentCategoryState() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(AGENT_CATEGORY_STATE_KEY) || "{}");
+    return {
+      names: parsed?.names && typeof parsed.names === "object" ? parsed.names : {},
+      custom: Array.isArray(parsed?.custom) ? parsed.custom.filter((entry) => entry?.id && entry?.label) : [],
+      hidden: Array.isArray(parsed?.hidden) ? parsed.hidden.map(String) : []
+    };
+  } catch (error) {
+    return { names: {}, custom: [], hidden: [] };
+  }
+}
+
+function saveAgentCategoryState() {
+  localStorage.setItem(AGENT_CATEGORY_STATE_KEY, JSON.stringify(agentCategoryState));
+}
+
+function agentCategories() {
+  const rules = [
+    { id: "life", defaultLabel: "人生系统", infer: (item) => /人生|私人|个人/.test(item.label || "") },
+    { id: "tutorial", defaultLabel: "部门教程", infer: (item) => /教程|部署|build|网页|域名/i.test(item.label || "") },
+    { id: "ai-life", defaultLabel: "和AI搭档生活", infer: (item) => /AI|搭档|Work/i.test(item.label || "") },
+    { id: "media", defaultLabel: "Cola+OB自媒体", infer: (item) => /Cola|OB/i.test(item.label || "") },
+    { id: "psychology", defaultLabel: "心理学书库", infer: (item) => /心理/.test(item.label || "") }
+  ];
+  const explicitCategory = (item) => String(item?.agent?.categoryId || "");
+  const builtIn = [
+    { id: "all", defaultLabel: "全部智能体", match: () => true },
+    ...rules.map((entry) => ({
+      id: entry.id,
+      defaultLabel: entry.defaultLabel,
+      match: (item) => explicitCategory(item) ? explicitCategory(item) === entry.id : entry.infer(item)
+    })),
+    {
+      id: "uncategorized",
+      defaultLabel: "未分类",
+      match: (item) => explicitCategory(item)
+        ? explicitCategory(item) === "uncategorized"
+        : !rules.some((entry) => entry.infer(item))
+    }
+  ]
+    .filter((entry) => !agentCategoryState.hidden.includes(entry.id) || entry.id === "all" || entry.id === "uncategorized")
+    .map((entry) => ({ ...entry, label: agentCategoryState.names[entry.id] || entry.defaultLabel }));
+  const custom = agentCategoryState.custom.map((entry) => {
+    const ids = new Set(Array.isArray(entry.itemIds) ? entry.itemIds : []);
+    return {
+      id: entry.id,
+      label: entry.label,
+      match: (item) => explicitCategory(item) ? explicitCategory(item) === entry.id : ids.has(item.id),
+      custom: true
+    };
+  });
+  return [...builtIn, ...custom];
+}
+
+function agentCategoryForItem(item) {
+  const categories = agentCategories().filter((category) => category.id !== "all");
+  const explicit = String(item?.agent?.categoryId || "");
+  return categories.find((category) => category.id === explicit)
+    || categories.find((category) => category.custom && category.match(item))
+    || categories.find((category) => category.match(item))
+    || categories.find((category) => category.id === "uncategorized");
+}
+
+function activeAgentCategoryDefinition() {
+  const categories = agentCategories();
+  return categories.find((category) => category.id === activeAgentCategory) || categories[0];
+}
+
+function deleteAgentCategory(categoryId) {
+  if (!categoryId || categoryId === "all" || categoryId === "uncategorized") return;
+  const customCategory = agentCategoryState.custom.find((entry) => entry.id === categoryId);
+  if (customCategory) {
+    agentCategoryState.custom = agentCategoryState.custom.filter((entry) => entry.id !== categoryId);
+  } else if (!agentCategoryState.hidden.includes(categoryId)) {
+    agentCategoryState.hidden.push(categoryId);
+  }
+  delete agentCategoryState.names[categoryId];
+  desktopItems.forEach((item) => {
+    if (String(item?.agent?.categoryId || "") !== categoryId) return;
+    item.agent = { ...normalizeAgentProfile(item.agent, item), categoryId: "uncategorized" };
+  });
+  if (activeAgentCategory === categoryId) activeAgentCategory = "all";
+  saveAgentCategoryState();
+  saveDesktopItems();
+  renderDesktopItems();
+}
+
+function openAgentCategoryDialog(categoryId = "") {
+  document.querySelector(".agent-category-dialog")?.remove();
+  const category = categoryId ? agentCategories().find((entry) => entry.id === categoryId) : null;
+  const editing = Boolean(category);
+  const win = document.createElement("div");
+  win.className = "os-window agent-category-dialog";
+  win.style.zIndex = ++winZ;
+  const bar = document.createElement("div");
+  bar.className = "os-window-bar";
+  bar.innerHTML = "<i></i><i></i><i></i><span>" + (editing ? "修改分类名称" : "新建智能体分类") + "</span>";
+  const body = document.createElement("div");
+  body.className = "os-body";
+  const deleteButton = editing && !["all", "uncategorized"].includes(categoryId) ? '<button class="agent-category-delete danger" type="button">删除</button>' : "";
+  body.innerHTML = '<label for="agentCategoryNameInput">分类名称</label><input id="agentCategoryNameInput" class="agent-category-name-input" maxlength="24" value="' + escapeHtml(category?.label || "") + '" placeholder="输入分类名称"><small class="agent-category-dialog-feedback">' + (editing ? "修改后左侧分类名称会立即同步。" : "新分类创建后会显示在左侧分类列表。") + '</small><div class="agent-category-dialog-actions' + (deleteButton ? " has-delete" : "") + '">' + deleteButton + '<button class="agent-category-cancel" type="button">取消</button><button class="agent-category-save primary" type="button">' + (editing ? "保存修改" : "创建分类") + "</button></div>";
+  win.appendChild(bar);
+  win.appendChild(body);
+  const close = () => win.remove();
+  bar.querySelector("i").addEventListener("click", close);
+  body.querySelector(".agent-category-cancel").addEventListener("click", close);
+  body.querySelector(".agent-category-delete")?.addEventListener("click", () => {
+    deleteAgentCategory(categoryId);
+    close();
+  });
+  const save = () => {
+    const input = body.querySelector(".agent-category-name-input");
+    const feedback = body.querySelector(".agent-category-dialog-feedback");
+    const label = input.value.trim();
+    if (!label) {
+      feedback.textContent = "请输入分类名称。";
+      input.focus();
+      return;
+    }
+    if (editing) {
+      const custom = agentCategoryState.custom.find((entry) => entry.id === categoryId);
+      if (custom) custom.label = label;
+      else agentCategoryState.names[categoryId] = label;
+    } else {
+      const id = "custom-category-" + Date.now();
+      agentCategoryState.custom.push({ id, label, itemIds: [] });
+      activeAgentCategory = id;
+    }
+    saveAgentCategoryState();
+    renderDesktopItems();
+    close();
+  };
+  body.querySelector(".agent-category-save").addEventListener("click", save);
+  body.querySelector(".agent-category-name-input").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") save();
+    if (event.key === "Escape") close();
+  });
+  document.body.appendChild(win);
+  centerWindow(win);
+  requestAnimationFrame(() => body.querySelector(".agent-category-name-input")?.focus());
+}
+
+function searchableAgentText(item) {
+  const agent = normalizeAgentProfile(item.agent, item);
+  return [
+    item.label,
+    item.path,
+    item.content,
+    item.fileType,
+    item.kind,
+    agent.role,
+    agent.model,
+    agent.knowledge,
+    ...(agent.tools || [])
+  ].filter(Boolean).join(" ").toLocaleLowerCase();
+}
+
+function matchesAgentSearch(item, query) {
+  const tokens = query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  if (!tokens.length) return true;
+  const searchable = searchableAgentText(item);
+  return tokens.every((token) => searchable.includes(token));
+}
+
+function sortAgentItems(items) {
+  return [...items].sort((a, b) => {
+    if (agentSortOrder === "oldest") return String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+    if (agentSortOrder === "name-asc") return String(a.label || "").localeCompare(String(b.label || ""), "zh-CN");
+    if (agentSortOrder === "name-desc") return String(b.label || "").localeCompare(String(a.label || ""), "zh-CN");
+    return String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
+  });
+}
+
+function applyAgentCategoryCollapse() {
+  osBoard.classList.toggle("agent-categories-collapsed", agentCategoriesCollapsed);
+  agentCategoryCollapseBtn.setAttribute("aria-expanded", String(!agentCategoriesCollapsed));
+  agentCategoryCollapseBtn.title = agentCategoriesCollapsed ? "展开智能体分类" : "收起智能体分类";
+  agentCategoryCollapseBtn.textContent = agentCategoriesCollapsed ? "» 展开" : "« 收起";
+}
+
 function renderDesktopItems() {
+  syncAdminOnlyVisibility();
   applyDesktopRightLayout();
-  const query = desktopSearch.value.trim().toLowerCase();
-  appGrid.innerHTML = desktopItems
-    .filter((item) => !query || String(item.label || "").toLowerCase().includes(query) || String(item.path || "").toLowerCase().includes(query))
-    .map(renderAppCard)
-    .join("");
+  applyAgentCategoryCollapse();
+  const query = desktopSearchQuery.trim();
+  const allItems = visibleDesktopItems().filter((item) => !item.parentId);
+  const category = activeAgentCategoryDefinition();
+  const visible = sortAgentItems(allItems
+    .filter(category.match)
+    .filter((item) => agentStatusFilter === "all" || normalizeAgentProfile(item.agent, item).status === agentStatusFilter)
+    .filter((item) => matchesAgentSearch(item, query)));
+  desktopSearchStatus.textContent = query || activeAgentCategory !== "all" || agentStatusFilter !== "all"
+    ? "找到 " + visible.length + " 个智能体"
+    : "";
+  const bounds = desktopCanvasBounds();
+  appGrid.style.height = bounds.virtualHeight + "px";
+  appGrid.style.minHeight = bounds.virtualHeight + "px";
+  if (visible.length && !visible.some((item) => selectedDesktopIds.has(item.id))) {
+    selectedDesktopIds = new Set([visible[0].id]);
+    selectedDesktopId = visible[0].id;
+  }
+  appGrid.innerHTML = visible.length
+    ? visible.map((item, index) => renderAppCard(item, index, visible.length)).join("")
+    : '<div class="agent-search-empty"><strong>没有匹配的智能体</strong><span>请调整搜索词，或切换左侧智能体分类。</span></div>';
+  applyAgentDisplayMode();
+  layoutAgentOrbitCards();
+  renderAgentDashboard(visible, allItems);
+}
+
+function visibleDesktopItems() {
+  return desktopItems.filter((item) => item.id !== "item-admin" || isAdminUser());
+}
+
+function selectedAgentInsightItem() {
+  const itemId = agentInsightCode?.dataset.itemId;
+  return desktopItems.find((item) => item.id === itemId)
+    || visibleDesktopItems().find((item) => selectedDesktopIds.has(item.id) && !item.parentId)
+    || visibleDesktopItems().find((item) => !item.parentId);
+}
+
+function renderAgentInsightSkills(selectedTools) {
+  if (!agentInsightTags) return;
+  const selected = new Set(Array.isArray(selectedTools) ? selectedTools : []);
+  const skills = [...new Set([...selected, ...agentToolOptions].filter(Boolean))];
+  agentInsightTags.innerHTML = skills.map((skill) => {
+    const active = selected.has(skill);
+    const onlySelected = active && selected.size === 1;
+    return '<button type="button" data-agent-skill="' + escapeHtml(skill) + '" aria-pressed="' + String(active) + '"' + (onlySelected ? ' aria-label="' + escapeHtml(skill) + '，至少保留一个工具"' : "") + '>' + escapeHtml(skill) + '</button>';
+  }).join("");
+}
+
+function syncOpenAgentWindow(item) {
+  const win = document.querySelector('.os-window[data-agent-window="' + item.id + '"]');
+  if (!win) return;
+  const agent = normalizeAgentProfile(item.agent, item);
+  const modelSelect = win.querySelector(".agent-model-select");
+  const knowledgeSelect = win.querySelector(".agent-knowledge-select");
+  const toolSelect = win.querySelector(".agent-tool-select");
+  if (modelSelect) modelSelect.value = agent.model;
+  if (knowledgeSelect) knowledgeSelect.value = agent.knowledge;
+  if (toolSelect) {
+    Array.from(toolSelect.options).forEach((option) => {
+      option.selected = agent.tools.includes(option.value);
+    });
+  }
+  const summaryModel = win.querySelector(".agent-summary-model");
+    if (summaryModel) summaryModel.textContent = agentModelDisplayName(agent.model);
+}
+
+function updateSelectedAgentInsight(changes) {
+  const item = selectedAgentInsightItem();
+  if (!item) return;
+  const agent = normalizeAgentProfile(item.agent, item);
+  if (changes.model) agent.model = changes.model;
+  if (changes.knowledge) agent.knowledge = changes.knowledge;
+  if (Array.isArray(changes.tools) && changes.tools.length) agent.tools = changes.tools;
+  if (Object.prototype.hasOwnProperty.call(changes, "categoryId")) {
+    agent.categoryId = String(changes.categoryId || "uncategorized");
+    agentCategoryState.custom.forEach((category) => {
+      category.itemIds = (Array.isArray(category.itemIds) ? category.itemIds : []).filter((id) => id !== item.id);
+      if (category.id === agent.categoryId) category.itemIds.push(item.id);
+    });
+    saveAgentCategoryState();
+  }
+  item.agent = agent;
+  saveDesktopItems();
+  syncOpenAgentWindow(item);
+  renderDesktopItems();
+}
+
+function renderAgentDashboard(visibleItems, allItems) {
+  const items = Array.isArray(visibleItems) ? visibleItems : visibleDesktopItems().filter((item) => !item.parentId);
+  const categoryItems = Array.isArray(allItems) ? allItems : visibleDesktopItems().filter((item) => !item.parentId);
+  if (agentBoardList) {
+    const categoryRows = agentCategories().map((row) => {
+      const count = categoryItems.filter(row.match).length;
+      return { id: row.id, label: row.label, count, active: row.id === activeAgentCategory };
+    });
+    window.__WORKBENCH_AGENT_CATEGORIES__ = categoryRows;
+    window.dispatchEvent(new CustomEvent("workbench-agent-categories-sync", { detail: categoryRows }));
+    const activeCategory = categoryRows.find((row) => row.active) || categoryRows[0];
+    const categoryActionsPayload = {
+      id: activeCategory?.id || "all",
+      label: activeCategory?.label || "全部智能体",
+      canDelete: !["all", "uncategorized"].includes(activeCategory?.id || "all")
+    };
+    window.__WORKBENCH_AGENT_CATEGORY_ACTIONS__ = categoryActionsPayload;
+    window.dispatchEvent(new CustomEvent("workbench-agent-category-actions-sync", { detail: categoryActionsPayload }));
+  }
+  const selected = items.find((item) => selectedDesktopIds.has(item.id)) || items[0];
+  if (selected) {
+    const agent = normalizeAgentProfile(selected.agent, selected);
+    const selectedIndex = Math.max(0, items.findIndex((item) => item.id === selected.id));
+    const priority = selected.kind === "folder" || /后台|系统|总控/.test(selected.label || "") ? "高优先级" : selectedIndex % 3 === 0 ? "推荐" : "标准";
+    const deadlineDay = String(12 + selectedIndex % 15).padStart(2, "0");
+    if (agentInsightCode) agentInsightCode.dataset.itemId = selected.id;
+    if (agentInsightTitle) agentInsightTitle.textContent = selected.label || "未命名智能体";
+    if (agentInsightDesc) agentInsightDesc.textContent = agent.role + "已连接 " + agentModelDisplayName(agent.model) + "，可调用 " + agent.tools.slice(0, 3).join("、") + "。";
+    if (agentInsightCode) agentInsightCode.textContent = "AGT-2026-" + String(selectedIndex + 1).padStart(3, "0");
+    if (agentInsightPriority) agentInsightPriority.textContent = priority;
+    if (agentInsightOwner) agentInsightOwner.textContent = "当前登录成员";
+    if (agentInsightProject) agentInsightProject.textContent = selected.kind === "folder" ? selected.label : agent.role;
+    if (agentInsightDeadline) agentInsightDeadline.textContent = "2026-08-" + deadlineDay + " 18:00";
+    const selectedCategory = agentCategoryForItem(selected);
+    const categoryPayload = {
+      value: selectedCategory?.id || "uncategorized",
+      options: agentCategories()
+        .filter((category) => category.id !== "all")
+        .map((category) => ({ value: category.id, label: category.label }))
+    };
+    window.__WORKBENCH_AGENT_CATEGORY__ = categoryPayload;
+    window.dispatchEvent(new CustomEvent("workbench-agent-category-sync", { detail: categoryPayload }));
+    const modelPayload = {
+      value: resolveAgentModelValue(agent.model),
+      options: agentModelOptions.map((option) => ({
+        value: option,
+        label: agentModelDisplayName(option)
+      }))
+    };
+    const knowledgePayload = {
+      value: agent.knowledge,
+      options: [...new Set([agent.knowledge, ...agentKnowledgeChoices(selected)].filter(Boolean))].map((option) => ({ value: option, label: option }))
+    };
+    window.__WORKBENCH_AGENT_MODEL__ = modelPayload;
+    window.__WORKBENCH_AGENT_KNOWLEDGE__ = knowledgePayload;
+    window.dispatchEvent(new CustomEvent("workbench-agent-model-sync", { detail: modelPayload }));
+    window.dispatchEvent(new CustomEvent("workbench-agent-knowledge-sync", { detail: knowledgePayload }));
+    const selectedAgentPayload = {
+      id: selected.id,
+      label: selected.label || "",
+      role: agent.role,
+      categoryId: categoryPayload.value,
+      model: modelPayload.value,
+      knowledge: agent.knowledge,
+      tools: agent.tools,
+      categoryOptions: categoryPayload.options,
+      modelOptions: modelPayload.options,
+      knowledgeOptions: knowledgePayload.options,
+      toolOptions: agentToolOptions.map((option) => ({ value: option, label: option }))
+    };
+    window.__WORKBENCH_SELECTED_AGENT__ = selectedAgentPayload;
+    window.dispatchEvent(new CustomEvent("workbench-selected-agent-sync", { detail: selectedAgentPayload }));
+    if (agentInsightStatus) agentInsightStatus.textContent = ({ running: "运行中", idle: "空闲", completed: "已完成" })[agent.status] || "运行中";
+    renderAgentInsightSkills(agent.tools);
+    if (agentInsightAdvice) {
+      agentInsightAdvice.innerHTML = '<li>建议为“' + escapeHtml(selected.label || "当前智能体") + '”固定常用知识库，提升回答一致性。</li><li>已识别 ' + escapeHtml(String(agent.tools.length)) + ' 项可调用工具，可保存为快捷工作流。</li>';
+    }
+  }
 }
 
 function renderWorksFiles() {
@@ -1664,7 +3733,7 @@ function defaultWorksCanvasState() {
     ],
     cards: [
       { id: "portrait-card", layer: "profile", type: "image", x: 455, y: 150, title: "个人形象", body: "Portfolio portrait" },
-      { id: "profile-card", layer: "profile", type: "profile", x: 620, y: 170, title: "ESTHER不二", body: "1 person + AI = 1 team. 设计师 / AI 协作者 / 内容系统搭建者。" },
+      { id: "profile-card", layer: "profile", type: "profile", x: 620, y: 170, title: "Clink AI", body: "1 person + AI = 1 team. 设计师 / AI 协作者 / 内容系统搭建者。" },
       { id: "story-card", layer: "core", type: "text", x: 820, y: 165, title: "经历时间轴", body: "2021 - 2026：从空间设计到 AI 产品与知识库系统。" },
       { id: "quote-card", layer: "core", type: "quote", x: 620, y: 360, title: "核心叙事", body: "每一次能力迭代，都是把复杂系统压缩成一个界面。" },
       { id: "skill-card", layer: "skills", type: "link", x: 820, y: 520, title: "关键技能能力", body: "Vibe Coding / Agent Native / API 连接 / GTM" },
@@ -1695,6 +3764,7 @@ function saveWorksCanvasState(state) {
   try {
     localStorage.setItem(WORKS_CANVAS_KEY, JSON.stringify(state));
   } catch (error) {}
+  scheduleProjectStateSave();
 }
 
 function worksCanvasTemplate(type) {
@@ -1760,7 +3830,7 @@ function openWorksInfiniteCanvas() {
     overlay = document.createElement("div");
     overlay.id = "worksInfiniteCanvas";
     overlay.className = "works-canvas-overlay";
-    overlay.innerHTML = '<aside class="works-canvas-sidebar"><div class="works-canvas-brand"><i>ε</i><span>ESTHER Canvas</span></div><div class="works-canvas-layers"><h3>✦ Layers</h3><div id="worksCanvasLayers"></div></div><button id="worksCanvasNew" class="works-canvas-new">＋ 新建图层</button><div class="works-canvas-mini"><h3>✦ Minimap</h3><div class="works-canvas-mini-box"></div></div></aside><main class="works-canvas-stage"><button id="worksCanvasClose" class="works-canvas-close">×</button><div class="works-canvas-top"><button id="worksCanvasTemplateOpen" class="works-canvas-template-open">选择卡片模板</button><span>Scroll 缩放</span><span>·</span><span>Drag 移动画布</span><span>·</span><b>Workflow 连线</b></div><div id="worksCanvasBoard" class="works-canvas-board"><svg id="worksCanvasLinks" class="works-canvas-links"></svg></div><section id="worksCanvasLayerModal" class="works-canvas-layer-modal"><h3>✦ 新建图层</h3><input id="worksCanvasLayerName" placeholder="输入图层名称" value="新图层"><div><button id="worksCanvasLayerCancel">取消</button><button id="worksCanvasLayerCreate">创建</button></div></section><section id="worksCanvasTemplateModal" class="works-canvas-template-modal"><h3>✦ 选择卡片模板</h3><div class="works-canvas-template-grid"><button data-template="text">📝<br>文字卡</button><button data-template="quote">💬<br>引用卡</button><button data-template="image">🖼️<br>图片卡</button><button data-template="sticky">📌<br>便利贴</button><button data-template="moon">🌙<br>深色卡</button><button data-template="link">🔗<br>链接卡</button></div></section><section class="works-canvas-palette"><div id="worksCanvasInspector"></div></section><div class="works-canvas-bottom"><span>点击卡片两侧圆点进行连线</span><span>Layer 点击可定位卡片</span><span>配置卡片</span><span>独立保存</span></div><div class="works-canvas-zoom"><button data-zoom="-">−</button><span id="worksCanvasZoom">43%</span><button data-zoom="+">＋</button><button id="worksCanvasSave">💾</button></div></main>';
+    overlay.innerHTML = '<aside class="works-canvas-sidebar"><div class="works-canvas-brand"><i>C</i><span>Clink AI Canvas</span></div><div class="works-canvas-layers"><h3>✦ Layers</h3><div id="worksCanvasLayers"></div></div><button id="worksCanvasNew" class="works-canvas-new">＋ 新建图层</button><div class="works-canvas-mini"><h3>✦ Minimap</h3><div class="works-canvas-mini-box"></div></div></aside><main class="works-canvas-stage"><button id="worksCanvasClose" class="works-canvas-close">×</button><div class="works-canvas-top"><button id="worksCanvasTemplateOpen" class="works-canvas-template-open">选择卡片模板</button><span>Scroll 缩放</span><span>·</span><span>Drag 移动画布</span><span>·</span><b>Workflow 连线</b></div><div id="worksCanvasBoard" class="works-canvas-board"><svg id="worksCanvasLinks" class="works-canvas-links"></svg></div><section id="worksCanvasLayerModal" class="works-canvas-layer-modal"><h3>✦ 新建图层</h3><input id="worksCanvasLayerName" placeholder="输入图层名称" value="新图层"><div><button id="worksCanvasLayerCancel">取消</button><button id="worksCanvasLayerCreate">创建</button></div></section><section id="worksCanvasTemplateModal" class="works-canvas-template-modal"><h3>✦ 选择卡片模板</h3><div class="works-canvas-template-grid"><button data-template="text">📝<br>文字卡</button><button data-template="quote">💬<br>引用卡</button><button data-template="image">🖼️<br>图片卡</button><button data-template="sticky">📌<br>便利贴</button><button data-template="moon">🌙<br>深色卡</button><button data-template="link">🔗<br>链接卡</button></div></section><section class="works-canvas-palette"><div id="worksCanvasInspector"></div></section><div class="works-canvas-bottom"><span>点击卡片两侧圆点进行连线</span><span>Layer 点击可定位卡片</span><span>配置卡片</span><span>独立保存</span></div><div class="works-canvas-zoom"><button data-zoom="-">−</button><span id="worksCanvasZoom">43%</span><button data-zoom="+">＋</button><button id="worksCanvasSave">💾</button></div></main>';
     document.body.appendChild(overlay);
     setupWorksCanvasEvents(overlay);
   }
@@ -2097,16 +4167,245 @@ function setupWorksCanvasEvents(overlay) {
   });
 }
 
-function renderAppCard(item) {
+function renderAppCard(item, index = 0, total = 1) {
   const windowMap = {
     "Design Skill": "win-design-skill",
     "Work With Me": "win-work",
     "网页进化史": "win-website-history"
   };
-  const action = item.kind === "window" ? 'data-window="' + (item.windowId || windowMap[item.label]) + '"' : 'data-command="cat ' + item.path + '"';
+  const action = item.kind === "folder" ? 'data-folder="' + escapeHtml(item.id) + '"' : item.kind === "window" ? 'data-window="' + (item.windowId || windowMap[item.label]) + '"' : item.kind === "link" ? 'data-url="' + escapeHtml(item.url || item.path) + '"' : 'data-command="cat ' + item.path + '"';
   const selected = selectedDesktopIds.has(item.id) ? " selected" : "";
   const ext = "." + fileTypeFor(item).toLowerCase();
-  return '<button class="app-card' + selected + '" data-id="' + item.id + '" data-ext="' + escapeHtml(ext) + '" ' + action + ' style="left:' + item.x + 'px;top:' + item.y + 'px"><small>dim_' + item.index + '</small><strong>' + escapeHtml(item.label) + '</strong></button>';
+  const agent = normalizeAgentProfile(item.agent, item);
+  const title = escapeHtml(item.label || "未命名");
+  const tools = agent.tools.slice(0, 3).map((tool) => '<span class="agent-tool-chip">' + escapeHtml(tool) + '</span>').join("");
+  const initialAngle = Math.PI / 2 + index / Math.max(1, total) * Math.PI * 2;
+  const initialDepth = (Math.sin(initialAngle) + 1) / 2;
+  const orbitStyle = "--orbit-x:" + (Math.cos(initialAngle) * 270).toFixed(2) + "px;--orbit-y:" + (Math.sin(initialAngle) * 90).toFixed(2) + "px;--orbit-z:" + (initialDepth * 160 - 70).toFixed(2) + "px;--orbit-scale:" + (0.72 + initialDepth * 0.28).toFixed(3) + ";--orbit-opacity:" + (0.52 + initialDepth * 0.48).toFixed(3) + ";--orbit-tilt:" + (Math.cos(initialAngle) * -16).toFixed(2) + "deg;--orbit-order:" + (120 + Math.round(initialDepth * 260));
+  return '<div class="app-card agent-card' + selected + '" role="button" tabindex="0" data-id="' + item.id + '" data-ext="' + escapeHtml(ext) + '" title="' + title + '" aria-label="' + title + '" aria-pressed="' + (selected ? "true" : "false") + '" ' + action + ' style="' + orbitStyle + '"><div class="agent-card-head"><span class="agent-avatar" aria-hidden="true">' + escapeHtml(agent.initials) + '</span><span class="agent-card-title"><strong>' + title + '</strong><small>' + escapeHtml(agent.role) + '</small></span></div><span class="agent-card-meta"><span class="agent-meta-row"><span>模型</span><span>' + escapeHtml(agentModelDisplayName(agent.model)) + '</span></span><span class="agent-meta-row"><span>知识库</span><span>' + escapeHtml(agent.knowledge) + '</span></span></span><span class="agent-tool-line">' + tools + '</span><button class="agent-chat-btn" type="button" data-id="' + escapeHtml(item.id) + '">打开对话</button></div>';
+}
+
+function agentProfileFor(item) {
+  const label = String(item?.label || "未命名项目");
+  const type = normalizeFileType(item?.fileType || extensionFromPath(item?.path || ""));
+  const lower = label.toLowerCase();
+  let role = "知识库智能体";
+  let model = "Qwen3";
+  let tools = ["RAG检索", "文件编辑", "总结"];
+  if (lower.includes("ppt") || lower.includes("powerpoint") || lower.includes("演示文稿")) {
+    role = "演示文稿生成智能体";
+    model = "Qwen3";
+    tools = ["PPT大纲", "模板排版", "图表信息页", "图片页", "演讲备注", "PPTX导出"];
+  } else if (item?.kind === "folder") {
+    role = "项目空间智能体";
+    model = "DeepSeek";
+    tools = ["文件归档", "项目问答", "目录整理"];
+  } else if (item?.kind === "link" || lower.includes("后台")) {
+    role = "管理智能体";
+    model = "Admin";
+    tools = ["权限", "数据看板", "成员"];
+  } else if (lower.includes("设计") || lower.includes("design")) {
+    role = "设计研究智能体";
+    model = "Gemini Flash";
+    tools = ["视觉分析", "灵感整理", "方案生成"];
+  } else if (lower.includes("教程") || lower.includes("build")) {
+    role = "教程拆解智能体";
+    model = "Qwen3";
+    tools = ["步骤拆解", "代码说明", "清单"];
+  } else if (lower.includes("人生") || lower.includes("私人")) {
+    role = "个人成长智能体";
+    model = "DeepSeek";
+    tools = ["复盘", "计划", "长期记忆"];
+  }
+  return {
+    role,
+    model,
+    knowledge: item?.kind === "folder" ? label + " 文件夹" : (type.toUpperCase() + " · " + label),
+    tools,
+    initials: agentInitials(label)
+  };
+}
+
+function normalizeAgentProfile(agent, item) {
+  const fallback = agentProfileFor(item);
+  const tools = Array.isArray(agent?.tools) && agent.tools.length ? agent.tools.map((tool) => String(tool)).filter(Boolean) : fallback.tools;
+  const statusValues = ["running", "idle", "completed"];
+  const fallbackStatus = statusValues[Math.abs(Number(item?.index || 1) - 1) % statusValues.length];
+  return {
+    role: String(agent?.role || fallback.role),
+    model: resolveAgentModelValue(agent?.model || fallback.model),
+    knowledge: String(agent?.knowledge || fallback.knowledge),
+    tools,
+    initials: String(agent?.initials || fallback.initials).slice(0, 2).toUpperCase(),
+    status: statusValues.includes(agent?.status) ? agent.status : fallbackStatus,
+    categoryId: String(agent?.categoryId || "")
+  };
+}
+
+function renderAgentSelect(options, value, className, label) {
+  const uniqueOptions = [...new Set([value, ...options].filter(Boolean))];
+  return '<select class="' + className + '" aria-label="' + escapeHtml(label) + '">' + uniqueOptions.map((option) => '<option value="' + escapeHtml(option) + '"' + (option === value ? " selected" : "") + '>' + escapeHtml(option) + '</option>').join("") + '</select>';
+}
+
+function agentKnowledgeChoices(item) {
+  const itemDefault = agentProfileFor(item).knowledge;
+  const savedKnowledge = desktopItems.map((entry) => normalizeAgentProfile(entry.agent, entry).knowledge);
+  return [...new Set([itemDefault, ...savedKnowledge, ...agentKnowledgeOptions].filter(Boolean))];
+}
+
+function renderAgentToolSelect(value, className, label) {
+  const selected = Array.isArray(value) ? value : [];
+  const uniqueOptions = [...new Set([...selected, ...agentToolOptions].filter(Boolean))];
+  return '<select class="' + className + '" aria-label="' + escapeHtml(label) + '" multiple size="4">' + uniqueOptions.map((option) => '<option value="' + escapeHtml(option) + '"' + (selected.includes(option) ? " selected" : "") + '>' + escapeHtml(option) + '</option>').join("") + '</select>';
+}
+
+function agentInitials(label) {
+  const text = String(label || "AI").trim();
+  const ascii = text.match(/[A-Za-z0-9]/g);
+  if (ascii && ascii.length) return ascii.slice(0, 2).join("").toUpperCase();
+  return text.slice(0, 2) || "AI";
+}
+
+function fileIconLabelFor(item) {
+  const labels = {
+    md: "MD",
+    txt: "TXT",
+    json: "{}",
+    csv: "CSV",
+    html: "HTML",
+    pdf: "PDF"
+  };
+  return labels[fileTypeFor(item)] || fileTypeFor(item).toUpperCase();
+}
+
+function moveItemsIntoFolder(items, folderId) {
+  const folder = desktopItems.find((entry) => entry.id === folderId && entry.kind === "folder");
+  if (!folder) return false;
+  let moved = false;
+  items.forEach((item) => {
+    if (!item || item.id === folderId || item.kind === "folder" || item.kind === "window") return;
+    item.parentId = folderId;
+    item.autoArrange = false;
+    moved = true;
+  });
+  if (moved) setDesktopSelection([], false);
+  return moved;
+}
+
+function createDesktopFolder(label, source = "desktop") {
+  const id = "folder-" + Date.now();
+  const visibleCount = desktopItems.filter((item) => !item.parentId).length;
+  const point = desktopRightSlot(visibleCount);
+  const folder = {
+    id,
+    label: label || "新建文件夹",
+    path: id,
+    index: String(desktopItems.length + 1).padStart(2, "0"),
+    kind: "folder",
+    windowId: "",
+    x: source === "desktop" ? point.x : 80,
+    y: source === "desktop" ? point.y : 120,
+    autoArrange: source === "desktop",
+    source,
+    fileType: "folder",
+    content: "",
+    agent: agentProfileFor({ label: label || "新建文件夹", kind: "folder", fileType: "folder" })
+  };
+  desktopItems.push(folder);
+  return folder;
+}
+
+function openDesktopFolderWindow(folder) {
+  const existing = document.querySelector('.os-window[data-folder-window="' + folder.id + '"]');
+  if (existing) {
+    centerWindow(existing);
+    existing.style.zIndex = ++winZ;
+    return;
+  }
+  const win = document.createElement("div");
+  win.className = "os-window";
+  win.dataset.folderWindow = folder.id;
+  win.dataset.title = folder.label || "文件夹";
+  win.style.left = 46 + (openCount % 5) * 32 + "px";
+  win.style.top = 38 + (openCount % 5) * 28 + "px";
+  win.style.zIndex = ++winZ;
+  openCount++;
+  const bar = document.createElement("div");
+  bar.className = "os-window-bar";
+  bar.innerHTML = "<i></i><i></i><i></i><span>" + escapeHtml(folder.label || "文件夹") + "</span>";
+  const body = document.createElement("div");
+  body.className = "os-body desktop-folder-body";
+  win.appendChild(bar);
+  win.appendChild(body);
+  const renderFolderBody = () => {
+    const children = desktopItems.filter((item) => item.parentId === folder.id);
+    body.innerHTML = children.length
+      ? children.map((item) => '<button class="desktop-folder-file" data-id="' + item.id + '"><b>' + escapeHtml(item.label || "未命名") + '</b><small>' + escapeHtml(fileTypeFor(item).toUpperCase() + " · " + (item.path || "")) + '</small></button>').join("")
+      : '<div class="desktop-folder-empty">把桌面文件拖进来。</div>';
+  };
+  renderFolderBody();
+  bar.querySelector("i").addEventListener("click", (event) => {
+    event.stopPropagation();
+    win.remove();
+  });
+  body.addEventListener("click", (event) => {
+    const button = event.target.closest(".desktop-folder-file");
+    if (!button) return;
+    const item = desktopItems.find((entry) => entry.id === button.dataset.id);
+    if (item) openDocumentWindow(item);
+  });
+  makeWindowDraggable(win, bar);
+  desktopSurface.appendChild(win);
+  centerWindow(win);
+}
+
+function openAgentChatWindow(item) {
+  const agent = normalizeAgentProfile(item.agent, item);
+  const model = resolveAgentModelValue(agent.model);
+  if (!activeModelSettings.ready || !model || !agentModelOptions.includes(model)) {
+    window.dispatchEvent(new CustomEvent("workbench-model-required"));
+    return;
+  }
+  window.dispatchEvent(new CustomEvent("workbench-open-agent-chat", {
+    detail: {
+      id: item.id,
+      label: item.label || "未命名智能体",
+      role: agent.role,
+      model,
+      knowledge: agent.knowledge,
+      tools: agent.tools,
+      isPpt: item.id === "agent-ppt-general" || agent.tools.includes("PPTX导出")
+    }
+  }));
+}
+
+function openHelpDocsWindow() {
+  const existing = document.querySelector('.os-window[data-help-docs="true"]');
+  if (existing) {
+    centerWindow(existing);
+    existing.style.zIndex = ++winZ;
+    return;
+  }
+  const win = document.createElement("div");
+  win.className = "os-window help-docs-window";
+  win.dataset.helpDocs = "true";
+  win.dataset.title = "帮助文档";
+  win.style.zIndex = ++winZ;
+  const bar = document.createElement("div");
+  bar.className = "os-window-bar";
+  bar.innerHTML = "<i></i><i></i><i></i><span>帮助文档</span>";
+  const body = document.createElement("div");
+  body.className = "os-body help-docs-body";
+  body.innerHTML = '<h3>知识库项目帮助文档</h3><p>这里放置当前工作台最常用的操作说明，方便成员快速理解桌面、智能体、画板和后台入口。</p><ul class="help-docs-list"><li><b>登录与成员</b><span>未登录时只能看到登录与注册入口；注册申请会进入后台，由管理员同意或拒绝。</span></li><li><b>智能体工作台</b><span>左侧按分类筛选智能体，中间支持椭圆轮盘和平铺视图，右侧显示所选智能体详情。</span></li><li><b>无限画板</b><span>顶部“无限画板”入口可打开画布，用于卡片编排、图层管理和内容连接。</span></li><li><b>后台管理</b><span>管理员可进入后台管理成员、权限、注册申请和数据看板。</span></li><li><b>部署与数据</b><span>线上版本通过服务器保存项目数据，前端代码更新后需要重新发布到服务器。</span></li></ul>';
+  win.appendChild(bar);
+  win.appendChild(body);
+  bar.querySelector("i").addEventListener("click", (event) => {
+    event.stopPropagation();
+    win.remove();
+  });
+  makeWindowDraggable(win, bar);
+  document.body.appendChild(win);
+  centerWindow(win);
 }
 
 function triggerLoop() {
@@ -2134,9 +4433,33 @@ function triggerLoop() {
   document.addEventListener("keydown", onKey);
 }
 
+function makeWindowDraggable(win, bar) {
+  win.addEventListener("pointerdown", () => {
+    win.style.zIndex = ++winZ;
+  });
+  bar.addEventListener("pointerdown", (event) => {
+    if (event.target.tagName === "I") return;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startLeft = win.offsetLeft;
+    const startTop = win.offsetTop;
+    const move = (moveEvent) => {
+      win.style.left = startLeft + moveEvent.clientX - startX + "px";
+      win.style.top = startTop + moveEvent.clientY - startY + "px";
+    };
+    const up = () => {
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", up);
+    };
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", up);
+  });
+}
+
 function openWindow(templateId) {
-  const existing = desktopSurface.querySelector('.os-window[data-from="' + templateId + '"]');
+  const existing = document.querySelector('.os-window[data-from="' + templateId + '"]');
   if (existing) {
+    centerWindow(existing);
     existing.style.zIndex = ++winZ;
     return;
   }
@@ -2145,7 +4468,7 @@ function openWindow(templateId) {
   const win = template.content.firstElementChild.cloneNode(true);
   if (templateId === "win-launchpad") {
     const body = win.querySelector("#launchpadBody");
-    if (body) body.innerHTML = desktopItems.map((item) => '<button data-command="cat ' + item.path + '"><span>' + item.index + '</span> ' + escapeHtml(item.label) + '</button>').join("");
+    if (body) body.innerHTML = visibleDesktopItems().filter((item) => !item.parentId).map((item) => '<button data-command="cat ' + item.path + '"><span>' + item.index + '</span> ' + escapeHtml(item.label) + '</button>').join("");
   }
   win.dataset.from = templateId;
   win.style.left = 36 + (openCount % 5) * 32 + "px";
@@ -2182,6 +4505,7 @@ function openWindow(templateId) {
     document.addEventListener("pointerup", up);
   });
   desktopSurface.appendChild(win);
+  centerWindow(win);
 }
 
 function getSelectedDesktopItem() {
@@ -2202,8 +4526,11 @@ function setDesktopSelection(ids, shouldRender = true, shouldUpdateActions = tru
     return;
   }
   appGrid.querySelectorAll(".app-card").forEach((card) => {
-    card.classList.toggle("selected", selectedDesktopIds.has(card.dataset.id));
+    const selected = selectedDesktopIds.has(card.dataset.id);
+    card.classList.toggle("selected", selected);
+    card.setAttribute("aria-pressed", selected ? "true" : "false");
   });
+  renderAgentDashboard();
 }
 
 function updateSelectionActions() {
@@ -2217,7 +4544,7 @@ function openDocumentWindow(itemOrPath) {
     ? desktopItems.find((entry) => normalizePath(entry.path) === normalizePath(itemOrPath))
     : itemOrPath;
   const normalized = normalizePath(item?.path || itemOrPath);
-  const existing = desktopSurface.querySelector('.os-window[data-doc="' + normalized + '"]');
+  const existing = document.querySelector('.os-window[data-doc="' + normalized + '"]');
   const doc = docMap.get(normalized);
   if (existing) {
     renderDocumentPreview(existing, item || { path: normalized, content: doc?.content || "" });
@@ -2232,7 +4559,7 @@ function openDocumentWindow(itemOrPath) {
   openCount++;
   const bar = document.createElement("div");
   bar.className = "os-window-bar";
-  bar.innerHTML = "<i></i><i></i><i></i><span>" + normalized + "</span>";
+  bar.innerHTML = "<i></i><i></i><i></i><span>" + escapeHtml(item?.label || normalized) + "</span>";
   const body = document.createElement("div");
   body.className = "os-body";
   win.appendChild(bar);
@@ -2449,13 +4776,30 @@ function openEditorWindow(item, mountTarget = desktopSurface, source = "desktop"
   bar.innerHTML = "<i></i><i></i><i></i><span>" + (editing ? "Edit File" : "New File") + "</span>";
   const body = document.createElement("div");
   body.className = "os-body";
-  const linkImport = editing ? "" : '<div class="link-import-box"><label>根据链接生成文件</label><div class="link-import-row"><input class="link-import-url" placeholder="粘贴文章链接 / 收藏链接"><button class="link-import-btn" type="button">生成</button></div><small class="link-import-status">会自动填写标题、简介，并把可读取内容整理成结构化文档。</small></div>';
-  body.innerHTML = linkImport + '<label style="display:block;font-weight:800;margin-bottom:8px">文件名</label><input class="editor-title" style="width:100%;height:36px;border:1px solid #1a1a2e;border-radius:8px;padding:0 10px" value="' + escapeHtml(item?.label || "新建笔记") + '"><label style="display:block;font-weight:800;margin:14px 0 8px">格式</label><select class="editor-type" style="width:100%;height:36px;border:1px solid #1a1a2e;border-radius:8px;padding:0 10px;background:white">' + typeOptions + '</select><label style="display:block;font-weight:800;margin:14px 0 8px">内容</label><textarea class="editor-content" style="width:100%;height:220px;border:1px solid #1a1a2e;border-radius:8px;padding:10px;resize:vertical">' + escapeHtml(item?.content || docMap.get(normalizePath(item?.path || ""))?.content || defaultContentFor(currentType)) + '</textarea><button class="editor-save">保存</button>';
+  body.dataset.createMode = "file";
+  const canCreateFolder = !editing && source === "desktop";
+  const createMode = canCreateFolder ? '<div class="create-mode"><button class="create-mode-btn active" data-create-mode="file" aria-pressed="true" type="button">文件</button><button class="create-mode-btn" data-create-mode="folder" aria-pressed="false" type="button">文件夹</button></div>' : "";
+  const linkImport = editing ? "" : '<div class="link-import-box file-only"><label>根据链接生成文件</label><div class="link-import-row"><input class="link-import-url" placeholder="粘贴文章链接 / 收藏链接"><button class="link-import-btn" type="button">生成</button></div><small class="link-import-status">会自动填写标题、简介，并把可读取内容整理成结构化文档。</small></div>';
+  body.innerHTML = createMode + linkImport + '<label style="display:block;font-weight:800;margin-bottom:8px">名称</label><input class="editor-title" style="width:100%;height:36px;border:1px solid #1a1a2e;border-radius:8px;padding:0 10px" value="' + escapeHtml(item?.label || "新建笔记") + '"><label class="file-only" style="display:block;font-weight:800;margin:14px 0 8px">格式</label><select class="editor-type file-only" style="width:100%;height:36px;border:1px solid #1a1a2e;border-radius:8px;padding:0 10px;background:white">' + typeOptions + '</select><label class="file-only" style="display:block;font-weight:800;margin:14px 0 8px">内容</label><textarea class="editor-content file-only" style="width:100%;height:220px;border:1px solid #1a1a2e;border-radius:8px;padding:10px;resize:vertical">' + escapeHtml(item?.content || docMap.get(normalizePath(item?.path || ""))?.content || defaultContentFor(currentType)) + '</textarea><button class="editor-save">保存</button>';
   win.appendChild(bar);
   win.appendChild(body);
   bar.querySelector("i").addEventListener("click", (event) => {
     event.stopPropagation();
     win.remove();
+  });
+  body.querySelectorAll(".create-mode-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      body.dataset.createMode = button.dataset.createMode || "file";
+      body.classList.toggle("folder-create-mode", body.dataset.createMode === "folder");
+      body.querySelectorAll(".create-mode-btn").forEach((entry) => {
+        const active = entry === button;
+        entry.classList.toggle("active", active);
+        entry.setAttribute("aria-pressed", active ? "true" : "false");
+      });
+      const title = body.querySelector(".editor-title");
+      if (body.dataset.createMode === "folder" && title.value === "新建笔记") title.value = "新建文件夹";
+      if (body.dataset.createMode === "file" && title.value === "新建文件夹") title.value = "新建笔记";
+    });
   });
   const importButton = body.querySelector(".link-import-btn");
   if (importButton) {
@@ -2482,6 +4826,15 @@ function openEditorWindow(item, mountTarget = desktopSurface, source = "desktop"
   }
   body.querySelector(".editor-save").addEventListener("click", () => {
     const label = body.querySelector(".editor-title").value.trim() || "未命名";
+    if (canCreateFolder && body.dataset.createMode === "folder") {
+      const folder = createDesktopFolder(label, source);
+      setDesktopSelection([folder.id], false);
+      saveDesktopItems();
+      renderDesktopItems();
+      renderWorksFiles();
+      win.remove();
+      return;
+    }
     const fileType = normalizeFileType(body.querySelector(".editor-type").value);
     const content = body.querySelector(".editor-content").value;
     if (editing) {
@@ -2506,7 +4859,8 @@ function openEditorWindow(item, mountTarget = desktopSurface, source = "desktop"
       source,
       fileType,
       sourceUrl: body.dataset.sourceUrl || "",
-        content
+        content,
+        agent: agentProfileFor({ label, path: id + "." + fileType, kind: "doc", fileType })
       });
       setDesktopSelection([id], false);
     }
@@ -2521,9 +4875,11 @@ function openEditorWindow(item, mountTarget = desktopSurface, source = "desktop"
 
 function centerWindow(win) {
   requestAnimationFrame(() => {
+    if (win.parentElement !== document.body) document.body.appendChild(win);
+    win.classList.add("product-window-centered");
     const rect = win.getBoundingClientRect();
-    const left = Math.max(12, Math.round((window.innerWidth - rect.width) / 2));
-    const top = Math.max(46, Math.round((window.innerHeight - rect.height) / 2));
+    let left = Math.max(12, Math.round((window.innerWidth - rect.width) / 2));
+    let top = Math.max(12, Math.round((window.innerHeight - rect.height) / 2));
     win.style.left = left + "px";
     win.style.top = top + "px";
   });
@@ -2539,16 +4895,16 @@ function submitInput() {
 
 function runCommand(command) {
   if (command === "help") {
-    appendHtml("<p>可用命令：</p><ul><li>open esther-os.app</li><li>cat about.md</li><li>search AI</li><li>ai query \\"AI 协作\\"</li><li>ai summary about.md</li><li>fortune</li><li>exit</li></ul>");
+    appendHtml("<p>可用命令：</p><ul><li>open clink-ai.app</li><li>cat about.md</li><li>search AI</li><li>ai query \\"AI 协作\\"</li><li>ai summary about.md</li><li>fortune</li><li>exit</li></ul>");
     return;
   }
-  if (command === "open esther-os.app" || command === "ls") {
+  if (command === "open clink-ai.app" || command === "open esther-os.app" || command === "ls") {
     openWindow("win-launchpad");
-    appendText("esther OS opened. 单击图标选中，双击图标打开文档。");
+    appendText("Clink AI opened. 单击图标选中，双击图标打开文档。");
     return;
   }
   if (command === "whoami") {
-    appendText("AI-Terminal-KB / Markdown knowledge base / 1 person + AI = 1 team");
+    appendText("Clink AI / Markdown knowledge base / 1 person + AI = 1 team");
     return;
   }
   if (command.startsWith("cat ")) {
@@ -2559,7 +4915,7 @@ function runCommand(command) {
       return;
     }
     const doc = docMap.get(path);
-    appendHtml(doc ? markdownToHtml(doc.content) : "<p>未找到 " + escapeHtml(path) + "。输入 open esther-os.app 查看文档。</p>");
+    appendHtml(doc ? markdownToHtml(doc.content) : "<p>未找到 " + escapeHtml(path) + "。输入 open clink-ai.app 查看文档。</p>");
     return;
   }
   if (command.startsWith("search ")) {
@@ -2759,13 +5115,22 @@ window.desktopOS = {
       y: 120,
       autoArrange: true,
       fileType: type,
-      content
+      content,
+      agent: agentProfileFor({ label, path: id + "." + type, kind: "doc", fileType: type })
     });
     setDesktopSelection([id], false);
     saveDesktopItems();
     renderDesktopItems();
     renderWorksFiles();
     return id;
+  },
+  createFolder: (label) => {
+    const folder = createDesktopFolder(label, "desktop");
+    setDesktopSelection([folder.id], false);
+    saveDesktopItems();
+    renderDesktopItems();
+    renderWorksFiles();
+    return folder.id;
   },
   editFile: (id, patch) => {
     const item = desktopItems.find((entry) => entry.id === id);
@@ -2782,12 +5147,31 @@ window.desktopOS = {
   },
   deleteFile: (id) => {
     const before = desktopItems.length;
-    desktopItems = desktopItems.filter((entry) => entry.id !== id);
+    const deleteIds = new Set([id]);
+    desktopItems.forEach((entry) => {
+      if (entry.parentId === id) deleteIds.add(entry.id);
+    });
+    desktopItems = desktopItems.filter((entry) => !deleteIds.has(entry.id));
     if (selectedDesktopIds.has(id)) setDesktopSelection([], false);
     saveDesktopItems();
     renderDesktopItems();
     renderWorksFiles();
     return desktopItems.length < before;
+  },
+  moveIntoFolder: (id, folderId) => {
+    const item = desktopItems.find((entry) => entry.id === id);
+    const ok = moveItemsIntoFolder([item], folderId);
+    if (!ok) return false;
+    saveDesktopItems();
+    renderDesktopItems();
+    renderWorksFiles();
+    return true;
+  },
+  openFolder: (id) => {
+    const folder = desktopItems.find((entry) => entry.id === id && entry.kind === "folder");
+    if (!folder) return false;
+    openDesktopFolderWindow(folder);
+    return true;
   },
   moveFile: (id, x, y) => {
     const item = desktopItems.find((entry) => entry.id === id);
@@ -2804,7 +5188,8 @@ window.desktopOS = {
   deleteWorksCategory: (category) => deleteWorksCategory(category),
   restoreWorksCategory: (category) => restoreWorksCategory(category),
   search: (query) => {
-    desktopSearch.value = query;
+    desktopSearchQuery = String(query || "");
+    window.dispatchEvent(new CustomEvent("workbench-agent-search-sync", { detail: desktopSearchQuery }));
     renderDesktopItems();
     return [...document.querySelectorAll(".app-card strong")].map((node) => node.textContent);
   },
@@ -2815,7 +5200,8 @@ window.desktopOS = {
     } catch (error) {}
     desktopItems = loadDesktopItems();
     setDesktopSelection([], false);
-    desktopSearch.value = "";
+    desktopSearchQuery = "";
+    window.dispatchEvent(new CustomEvent("workbench-agent-search-sync", { detail: "" }));
     renderDesktopItems();
     renderWorksFiles();
   },

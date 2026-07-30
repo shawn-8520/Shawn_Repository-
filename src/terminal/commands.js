@@ -26,7 +26,7 @@ export function createCommandRuntime({ documents, pushOutput, setExited }) {
     }
 
     if (command === "whoami") {
-      pushOutput("Robin / AI-Terminal-KB builder / Markdown knowledge worker");
+      pushOutput("Robin / Clink AI builder / Markdown knowledge worker");
       return;
     }
 
@@ -35,7 +35,7 @@ export function createCommandRuntime({ documents, pushOutput, setExited }) {
       return;
     }
 
-    if (command === "open esther-os.app" || command === "open os" || command === "ls") {
+    if (command === "open clink-ai.app" || command === "open esther-os.app" || command === "open os" || command === "ls") {
       pushOutput(renderNavigationBoard(), "html");
       return;
     }
@@ -45,7 +45,7 @@ export function createCommandRuntime({ documents, pushOutput, setExited }) {
       const doc = byPath.get(path);
 
       if (!doc) {
-        pushOutput(`未找到 ${path}。输入 open esther-os.app 查看可用文档。`);
+        pushOutput(`未找到 ${path}。输入 open clink-ai.app 查看可用文档。`);
         return;
       }
 
@@ -108,7 +108,7 @@ export function createCommandRuntime({ documents, pushOutput, setExited }) {
 
 export function renderBootSequence() {
   return [
-    ["whoami", "Robin / AI-Terminal-KB builder / Markdown knowledge worker"],
+    ["whoami", "Robin / Clink AI builder / Markdown knowledge worker"],
     ["cat about.md", null],
     ['echo "1 person + AI = 1 team"', "1 person + AI = 1 team"],
   ];
@@ -118,7 +118,7 @@ function renderHelp() {
   return `<div class="help-panel">
     <p>可用命令</p>
     <ul>
-      <li><code>open esther-os.app</code> 打开栏目看板</li>
+      <li><code>open clink-ai.app</code> 打开栏目看板</li>
       <li><code>cat about.md</code> 读取 Markdown 文档</li>
       <li><code>search 关键词</code> 全文检索知识库</li>
       <li><code>ai query "问题"</code> 基于本地文档模拟 RAG 检索</li>

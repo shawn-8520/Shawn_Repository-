@@ -1,4 +1,4 @@
-# AI-Terminal-KB 部署说明
+# Clink AI 部署说明
 
 ## 本地运行
 
@@ -7,6 +7,14 @@
 3. 构建静态文件：`npm run build`
 
 构建产物会生成在 `dist/`，可部署到 Vercel、GitHub Pages、Cloudflare Pages 或任意静态托管服务。
+
+## 前端组件库口径
+
+当前项目静态预览页仍以本地 HTML/CSS/JavaScript 构建产物为主。
+
+后续新增或重构前端页面、后台管理页面、表单、弹窗、下拉、卡片、表格等 UI 时，暂统一按 `Ant Design v6` 组件库标准执行。
+
+部署时不代表现有静态页面已经全部引入 Ant Design；它是后续前端组件化和 UI 重构的标准口径。
 
 ## 内容更新
 

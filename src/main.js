@@ -24,7 +24,7 @@ const state = {
 app.innerHTML = `
   <div class="desktop">
     <nav class="menu-bar">
-      <button class="brand" data-command="open esther-os.app">esther OS</button>
+      <button class="brand" data-command="open clink-ai.app">Clink AI</button>
       <button data-command="cat about.md">About</button>
       <button data-command="cat life-system.md">Values</button>
       <button data-command="cat ai-partner.md">Now</button>

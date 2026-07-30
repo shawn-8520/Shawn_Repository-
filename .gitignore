@@ -2,10 +2,16 @@ node_modules/
 vendor/**/node_modules/
 .npm-cache/
 .DS_Store
+backups/
+*.tar.gz
 
 # Local secrets and machine-specific config
 .env
 .env.*
+!.env.example
+!vendor/vue-element-admin/.env.development
+!vendor/vue-element-admin/.env.production
+!vendor/vue-element-admin/.env.staging
 *.pem
 *.key
 id_rsa*
@@ -13,4 +19,14 @@ id_rsa*
 # Keep deployable static output, ignore duplicated app build cache.
 vendor/**/dist/
 dist/
-
+generated/
+data/project-state.json
+data/project-state.json.tmp
+data/model-settings.json
+data/model-settings.json.tmp
+data/runtime-stats.json
+data/runtime-stats.json.tmp
+data/announcements.json
+data/announcements.json.tmp
+data/chat-history.json
+data/chat-history.json.tmp

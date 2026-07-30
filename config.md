@@ -1,4 +1,4 @@
-# AI-Terminal-KB 配置
+# Clink AI 配置
 
 ```yaml
 username: robin
@@ -22,3 +22,14 @@ defaultCommand: help
 - Work With Me 商务合作: work-with-me.md
 - 建筑转 AI 专题: architecture-to-ai.md
 - 网页迭代进化史: web-evolution.md
+
+## 前端组件配置标准
+
+```yaml
+componentLibrary: Ant Design v6
+componentStandard: Ant Design component semantics, states, forms, modals, feedback
+visualTheme: light gray-blue OS style
+rewritePolicy: keep current static MVP, align new/refactored frontend UI to Ant Design v6
+```
+
+后续涉及前端 UI 的新增或修改时，按钮、表单、下拉、弹窗、抽屉、表格、卡片、提示、上传等组件按 Ant Design v6 的调用和交互标准执行。

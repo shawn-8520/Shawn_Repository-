@@ -1,6 +1,6 @@
 # about.md
 
-我是 Robin 的 AI-Terminal-KB，一个终端风个人知识库原型。
+我是 Robin 的 Clink AI，一个终端风个人知识库原型。
 
 ## 身份标签
 
@@ -19,7 +19,7 @@
 
 在终端输入：
 
-- `open esther-os.app` 打开栏目看板
+- `open clink-ai.app` 打开栏目看板
 - `cat contact.md` 查看联系方式
 - `search AI` 搜索知识库
 - `ai query "AI 协作"` 检索并生成回答
