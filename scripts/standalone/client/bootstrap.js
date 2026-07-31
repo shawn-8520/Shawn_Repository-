@@ -1321,6 +1321,7 @@ function getAdminTokenValue() {
 
 function isAdminUser() {
   const token = getAdminTokenValue();
+  if (token.startsWith("admin-token-v1.")) return true;
   if (!token.startsWith("member-token-")) return false;
   const account = decodeURIComponent(token.replace("member-token-", ""));
   try {

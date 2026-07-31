@@ -4,6 +4,8 @@ import path from "node:path";
 import vm from "node:vm";
 
 const root = process.cwd();
+const npmCommand = process.platform === "win32" ? (process.env.ComSpec || "cmd.exe") : "npm";
+const npmPrefixArgs = process.platform === "win32" ? ["/d", "/s", "/c", "npm"] : [];
 const status = execFileSync("git", ["status", "--porcelain=v1"], { cwd: root, encoding: "utf8" });
 const changed = status
   .split(/\r?\n/)
@@ -30,7 +32,7 @@ const syntaxFiles = [
 for (const file of syntaxFiles) add(`语法 ${file}`, process.execPath, ["--check", file]);
 
 if (touches(/^(src\/|vite\.antd\.config\.js$|package(?:-lock)?\.json$)/)) {
-  add("Ant Design 工作台构建", "npm", ["run", "build:antd"]);
+  add("Ant Design 工作台构建", npmCommand, [...npmPrefixArgs, "run", "build:antd"]);
 }
 
 if (touches(/^(content\/|assets\/|scripts\/build-standalone\.js$|scripts\/standalone\/|src\/|vite\.antd\.config\.js$)/)) {
@@ -43,6 +45,7 @@ for (const check of checks) {
   const result = spawnSync(check.command, check.args, { cwd: root, stdio: "pipe", encoding: "utf8" });
   if (result.status !== 0) {
     console.log("失败");
+    if (result.error) console.error(result.error.message);
     process.stderr.write(result.stdout || "");
     process.stderr.write(result.stderr || "");
     process.exit(result.status || 1);

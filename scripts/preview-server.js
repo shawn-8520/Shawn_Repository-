@@ -1,12 +1,17 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { modelPresets } from "../src/config/model-presets.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "../outputs");
 const projectRoot = path.resolve(__dirname, "..");
+
+loadPrivateEnv(path.resolve(__dirname, "../.env"));
+loadPrivateEnv(path.resolve(__dirname, "../.env.local"));
+
 const dataDir = path.resolve(process.env.PROJECT_DATA_DIR || path.join(projectRoot, "data"));
 const projectStatePath = path.join(dataDir, "project-state.json");
 const runtimeStatsPath = path.join(dataDir, "runtime-stats.json");
@@ -15,9 +20,10 @@ const modelSettingsPath = path.join(dataDir, "model-settings.json");
 const chatHistoryPath = path.join(dataDir, "chat-history.json");
 const port = Number(process.env.PORT || 8099);
 const host = "127.0.0.1";
-
-loadPrivateEnv(path.resolve(__dirname, "../.env"));
-loadPrivateEnv(path.resolve(__dirname, "../.env.local"));
+const adminAccount = String(process.env.CLINK_ADMIN_ACCOUNT || "").trim();
+const adminPassword = String(process.env.CLINK_ADMIN_PASSWORD || "");
+const authSecret = String(process.env.CLINK_AUTH_SECRET || "");
+const authTokenLifetimeMs = 7 * 24 * 60 * 60 * 1000;
 
 const types = {
   ".html": "text/html; charset=utf-8",
@@ -59,6 +65,52 @@ function loadPrivateEnv(filePath) {
     const value = trimmed.slice(index + 1).trim().replace(/^["']|["']$/g, "");
     if (key && process.env[key] === undefined) process.env[key] = value;
   }
+}
+
+function secureTextEqual(actual, expected) {
+  const actualHash = createHash("sha256").update(String(actual)).digest();
+  const expectedHash = createHash("sha256").update(String(expected)).digest();
+  return timingSafeEqual(actualHash, expectedHash);
+}
+
+function authIsConfigured() {
+  return Boolean(adminAccount && adminPassword && authSecret.length >= 32);
+}
+
+function createAdminToken(account) {
+  const accountPart = Buffer.from(account, "utf8").toString("base64url");
+  const expiresAt = Date.now() + authTokenLifetimeMs;
+  const payload = `v1.${accountPart}.${expiresAt}`;
+  const signature = createHmac("sha256", authSecret).update(payload).digest("base64url");
+  return `admin-token-${payload}.${signature}`;
+}
+
+function verifyAdminToken(token) {
+  if (!authIsConfigured() || !String(token).startsWith("admin-token-v1.")) return null;
+  const parts = String(token).slice("admin-token-".length).split(".");
+  if (parts.length !== 4) return null;
+  const [version, accountPart, expiresAtText, signature] = parts;
+  const expiresAt = Number(expiresAtText);
+  if (version !== "v1" || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) return null;
+  const payload = `${version}.${accountPart}.${expiresAtText}`;
+  const expected = createHmac("sha256", authSecret).update(payload).digest("base64url");
+  if (!secureTextEqual(signature, expected)) return null;
+  try {
+    const account = Buffer.from(accountPart, "base64url").toString("utf8");
+    return account === adminAccount ? account : null;
+  } catch {
+    return null;
+  }
+}
+
+function tokenFromRequest(req, requestUrl, payload) {
+  return String(
+    req.headers["x-token"]
+    || req.headers["x-admin-token"]
+    || requestUrl?.searchParams.get("token")
+    || payload?.adminToken
+    || ""
+  );
 }
 
 function cleanImportedText(text) {
@@ -262,6 +314,8 @@ function requireAdmin(req, payload) {
   const token = String(req.headers["x-admin-token"] || payload?.adminToken || "");
   const privateToken = String(process.env.CLINK_API_ADMIN_TOKEN || "");
   if (privateToken && token === privateToken) return true;
+  if (verifyAdminToken(token)) return true;
+  if (String(process.env.CLINK_ALLOW_LEGACY_MEMBER_TOKENS || "").toLowerCase() !== "true") return false;
   if (!token.startsWith("member-token-")) return false;
   const account = decodeURIComponent(token.replace("member-token-", ""));
   const adminAccounts = String(process.env.CLINK_ADMIN_ACCOUNTS || "admin")
@@ -646,6 +700,54 @@ const server = http.createServer(async (req, res) => {
         status: "ready"
       }
     });
+    return;
+  }
+  if (requestUrl.pathname === "/api/auth/login") {
+    if (req.method !== "POST") {
+      sendJson(res, 405, { code: 40500, message: "Method Not Allowed" });
+      return;
+    }
+    try {
+      const payload = JSON.parse((await readRequestBody(req)) || "{}");
+      const valid = authIsConfigured()
+        && secureTextEqual(String(payload.username || "").trim(), adminAccount)
+        && secureTextEqual(String(payload.password || ""), adminPassword);
+      if (!valid) {
+        sendJson(res, 200, {
+          code: 60204,
+          message: authIsConfigured() ? "账号或密码错误" : "服务器尚未配置管理员账号"
+        });
+        return;
+      }
+      sendJson(res, 200, { code: 20000, data: { token: createAdminToken(adminAccount) } });
+    } catch (error) {
+      sendJson(res, 400, { code: 40000, message: error.message || "登录请求无效" });
+    }
+    return;
+  }
+  if (requestUrl.pathname === "/api/auth/info") {
+    if (req.method !== "GET") {
+      sendJson(res, 405, { code: 40500, message: "Method Not Allowed" });
+      return;
+    }
+    const account = verifyAdminToken(tokenFromRequest(req, requestUrl));
+    if (!account) {
+      sendJson(res, 200, { code: 50008, message: "登录已失效，请重新登录" });
+      return;
+    }
+    sendJson(res, 200, {
+      code: 20000,
+      data: {
+        roles: ["admin"],
+        introduction: "知识库管理员",
+        avatar: "",
+        name: account
+      }
+    });
+    return;
+  }
+  if (requestUrl.pathname === "/api/auth/logout") {
+    sendJson(res, 200, { code: 20000, data: "success" });
     return;
   }
   if (requestUrl.pathname === "/api/import-link") {

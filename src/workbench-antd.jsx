@@ -1195,6 +1195,7 @@ function UserArea() {
     const token = cookie
       ? decodeURIComponent(cookie.split("=").slice(1).join("="))
       : localStorage.getItem("Admin-Token") || "";
+    if (token.startsWith("admin-token-v1.")) return true;
     if (!token.startsWith("member-token-")) return false;
     const account = decodeURIComponent(token.replace("member-token-", ""));
     try {

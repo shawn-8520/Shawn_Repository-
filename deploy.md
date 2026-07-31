@@ -23,6 +23,16 @@ cd /www/wwwroot/ai-terminal-kb-repo
 bash scripts/deploy-baota.sh
 ```
 
+在仓库根目录创建不会提交到 GitHub 的 `.env.local`：
+
+```dotenv
+CLINK_ADMIN_ACCOUNT=your-admin-account
+CLINK_ADMIN_PASSWORD=use-a-strong-private-password
+CLINK_AUTH_SECRET=use-at-least-32-random-characters
+```
+
+管理员密码只保存在服务器私有环境中。修改配置后需要重启 PM2。
+
 在宝塔的网站 Nginx 配置的 `server {}` 中加入 `deploy/nginx-api.conf` 的 `location` 内容，然后重载 Nginx。
 
 验证：
