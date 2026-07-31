@@ -1,7 +1,7 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { modelPresets } from "../src/config/model-presets.js";
 
@@ -18,6 +18,8 @@ const runtimeStatsPath = path.join(dataDir, "runtime-stats.json");
 const announcementsPath = path.join(dataDir, "announcements.json");
 const modelSettingsPath = path.join(dataDir, "model-settings.json");
 const chatHistoryPath = path.join(dataDir, "chat-history.json");
+const membersPath = path.join(dataDir, "members.json");
+const registrationRequestsPath = path.join(dataDir, "registration-requests.json");
 const port = Number(process.env.PORT || 8099);
 const host = "127.0.0.1";
 const adminAccount = String(process.env.CLINK_ADMIN_ACCOUNT || "").trim();
@@ -41,7 +43,7 @@ function sendJson(res, status, payload) {
     "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, X-Admin-Token"
+    "Access-Control-Allow-Headers": "Content-Type, X-Admin-Token, X-Token"
   });
   res.end(JSON.stringify(payload));
 }
@@ -74,7 +76,7 @@ function secureTextEqual(actual, expected) {
 }
 
 function authIsConfigured() {
-  return Boolean(adminAccount && adminPassword && authSecret.length >= 32);
+  return authSecret.length >= 32 && Boolean((adminAccount && adminPassword) || readMembers().length);
 }
 
 function createAdminToken(account) {
@@ -86,7 +88,7 @@ function createAdminToken(account) {
 }
 
 function verifyAdminToken(token) {
-  if (!authIsConfigured() || !String(token).startsWith("admin-token-v1.")) return null;
+  if (authSecret.length < 32 || !String(token).startsWith("admin-token-v1.")) return null;
   const parts = String(token).slice("admin-token-".length).split(".");
   if (parts.length !== 4) return null;
   const [version, accountPart, expiresAtText, signature] = parts;
@@ -97,7 +99,7 @@ function verifyAdminToken(token) {
   if (!secureTextEqual(signature, expected)) return null;
   try {
     const account = Buffer.from(accountPart, "base64url").toString("utf8");
-    return account === adminAccount ? account : null;
+    return account.trim() || null;
   } catch {
     return null;
   }
@@ -310,19 +312,145 @@ function writeJsonFile(filePath, value) {
   if (filePath === modelSettingsPath) fs.chmodSync(filePath, 0o600);
 }
 
+function readCollection(filePath) {
+  if (!fs.existsSync(filePath)) return [];
+  try {
+    const value = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCollection(filePath, value) {
+  fs.mkdirSync(dataDir, { recursive: true });
+  const tempPath = filePath + ".tmp";
+  fs.writeFileSync(tempPath, JSON.stringify(value, null, 2), { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(tempPath, filePath);
+  fs.chmodSync(filePath, 0o600);
+}
+
+function hashPassword(password) {
+  const salt = randomBytes(16).toString("hex");
+  const digest = scryptSync(String(password), salt, 64).toString("hex");
+  return `scrypt$${salt}$${digest}`;
+}
+
+function verifyPassword(password, encoded) {
+  const [algorithm, salt, expectedHex] = String(encoded || "").split("$");
+  if (algorithm !== "scrypt" || !salt || !/^[a-f0-9]{128}$/i.test(expectedHex || "")) return false;
+  const actual = scryptSync(String(password), salt, 64);
+  const expected = Buffer.from(expectedHex, "hex");
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function normalizeRole(role) {
+  const value = String(role || "").trim();
+  if (["管理员", "admin"].includes(value)) return "管理员";
+  if (["访客", "只读成员", "viewer"].includes(value)) return "访客";
+  return "编辑者";
+}
+
+function roleKey(role) {
+  if (normalizeRole(role) === "管理员") return "admin";
+  if (normalizeRole(role) === "访客") return "viewer";
+  return "editor";
+}
+
+function normalizeStatus(status) {
+  return ["停用", "disabled"].includes(String(status || "").trim()) ? "停用" : "启用";
+}
+
+function validateAccount(account) {
+  const value = String(account || "").trim();
+  if (!/^[A-Za-z0-9_.@-]{3,64}$/.test(value)) throw new Error("账号需为 3-64 位字母、数字或 ._@-");
+  return value;
+}
+
+function validatePassword(password, required = true) {
+  const value = String(password || "");
+  if (!value && !required) return "";
+  if (value.length < 6 || value.length > 128) throw new Error("密码长度需为 6-128 位");
+  return value;
+}
+
+function readMembers() {
+  return readCollection(membersPath);
+}
+
+function writeMembers(members) {
+  writeCollection(membersPath, members);
+}
+
+function readRegistrationRequests() {
+  return readCollection(registrationRequestsPath);
+}
+
+function writeRegistrationRequests(requests) {
+  writeCollection(registrationRequestsPath, requests);
+}
+
+function publicMember(member) {
+  return {
+    id: String(member.id || ""),
+    name: String(member.name || ""),
+    account: String(member.account || ""),
+    email: String(member.email || ""),
+    role: normalizeRole(member.role),
+    status: normalizeStatus(member.status),
+    lastActive: String(member.lastActive || "从未登录"),
+    createdAt: String(member.createdAt || ""),
+    hasPassword: Boolean(member.passwordHash)
+  };
+}
+
+function publicRegistrationRequest(request) {
+  return {
+    id: String(request.id || ""),
+    name: String(request.name || ""),
+    account: String(request.account || ""),
+    email: String(request.email || ""),
+    message: String(request.message || ""),
+    role: normalizeRole(request.role),
+    status: String(request.status || "待审核"),
+    createdAt: String(request.createdAt || "")
+  };
+}
+
+function memberForAccount(account) {
+  const normalized = String(account || "").trim().toLowerCase();
+  return readMembers().find((member) => String(member.account || "").trim().toLowerCase() === normalized) || null;
+}
+
+function accountExists(account, exceptMemberId = "") {
+  const normalized = String(account || "").trim().toLowerCase();
+  if (adminAccount && adminAccount.toLowerCase() === normalized) return true;
+  return readMembers().some((member) => member.id !== exceptMemberId && String(member.account || "").trim().toLowerCase() === normalized);
+}
+
+function identityForAccount(account) {
+  if (adminAccount && account === adminAccount) {
+    return { account, name: account, email: "", role: "管理员", status: "启用", source: "environment" };
+  }
+  const member = memberForAccount(account);
+  if (!member || normalizeStatus(member.status) !== "启用") return null;
+  return { ...member, source: "member" };
+}
+
 function requireAdmin(req, payload) {
-  const token = String(req.headers["x-admin-token"] || payload?.adminToken || "");
+  const token = tokenFromRequest(req, null, payload);
   const privateToken = String(process.env.CLINK_API_ADMIN_TOKEN || "");
   if (privateToken && token === privateToken) return true;
-  if (verifyAdminToken(token)) return true;
+  const account = verifyAdminToken(token);
+  if (account && roleKey(identityForAccount(account)?.role) === "admin") return true;
   if (String(process.env.CLINK_ALLOW_LEGACY_MEMBER_TOKENS || "").toLowerCase() !== "true") return false;
   if (!token.startsWith("member-token-")) return false;
-  const account = decodeURIComponent(token.replace("member-token-", ""));
+  const legacyAccount = decodeURIComponent(token.replace("member-token-", ""));
   const adminAccounts = String(process.env.CLINK_ADMIN_ACCOUNTS || "admin")
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
-  return adminAccounts.includes(account);
+  return adminAccounts.includes(legacyAccount);
 }
 
 function defaultRuntimeStats() {
@@ -348,7 +476,7 @@ function recordRuntimeUsage(patch = {}) {
 }
 
 function projectStorageBytes() {
-  return [projectStatePath, runtimeStatsPath, announcementsPath, modelSettingsPath, chatHistoryPath]
+  return [projectStatePath, runtimeStatsPath, announcementsPath, modelSettingsPath, chatHistoryPath, membersPath, registrationRequestsPath]
     .reduce((total, filePath) => total + (fs.existsSync(filePath) ? fs.statSync(filePath).size : 0), 0);
 }
 
@@ -709,17 +837,31 @@ const server = http.createServer(async (req, res) => {
     }
     try {
       const payload = JSON.parse((await readRequestBody(req)) || "{}");
-      const valid = authIsConfigured()
-        && secureTextEqual(String(payload.username || "").trim(), adminAccount)
-        && secureTextEqual(String(payload.password || ""), adminPassword);
-      if (!valid) {
+      const account = String(payload.username || "").trim();
+      const password = String(payload.password || "");
+      const environmentAdminValid = Boolean(adminAccount && adminPassword)
+        && secureTextEqual(account, adminAccount)
+        && secureTextEqual(password, adminPassword);
+      const member = memberForAccount(account);
+      const memberValid = Boolean(member)
+        && normalizeStatus(member.status) === "启用"
+        && verifyPassword(password, member.passwordHash);
+      if (authSecret.length < 32 || (!environmentAdminValid && !memberValid)) {
         sendJson(res, 200, {
           code: 60204,
           message: authIsConfigured() ? "账号或密码错误" : "服务器尚未配置管理员账号"
         });
         return;
       }
-      sendJson(res, 200, { code: 20000, data: { token: createAdminToken(adminAccount) } });
+      if (memberValid) {
+        const members = readMembers();
+        const index = members.findIndex((item) => item.id === member.id);
+        if (index >= 0) {
+          members[index] = { ...members[index], lastActive: new Date().toISOString() };
+          writeMembers(members);
+        }
+      }
+      sendJson(res, 200, { code: 20000, data: { token: createAdminToken(environmentAdminValid ? adminAccount : member.account) } });
     } catch (error) {
       sendJson(res, 400, { code: 40000, message: error.message || "登录请求无效" });
     }
@@ -731,23 +873,244 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     const account = verifyAdminToken(tokenFromRequest(req, requestUrl));
-    if (!account) {
+    const identity = identityForAccount(account);
+    if (!identity) {
       sendJson(res, 200, { code: 50008, message: "登录已失效，请重新登录" });
       return;
     }
     sendJson(res, 200, {
       code: 20000,
       data: {
-        roles: ["admin"],
-        introduction: "知识库管理员",
+        roles: [roleKey(identity.role)],
+        introduction: identity.role,
         avatar: "",
-        name: account
+        name: identity.name || identity.account
       }
     });
     return;
   }
   if (requestUrl.pathname === "/api/auth/logout") {
     sendJson(res, 200, { code: 20000, data: "success" });
+    return;
+  }
+  if (requestUrl.pathname === "/api/members/migrate" && req.method === "POST") {
+    try {
+      const payload = JSON.parse((await readRequestBody(req)) || "{}");
+      if (!requireAdmin(req, payload)) throw new Error("仅管理员可迁移成员");
+      const members = readMembers();
+      const knownAccounts = new Set([
+        adminAccount.toLowerCase(),
+        ...members.map((member) => String(member.account || "").trim().toLowerCase())
+      ].filter(Boolean));
+      let importedMembers = 0;
+      for (const input of Array.isArray(payload.members) ? payload.members : []) {
+        try {
+          const account = validateAccount(input.account);
+          const password = validatePassword(input.password);
+          if (knownAccounts.has(account.toLowerCase())) continue;
+          members.unshift({
+            id: `member-${Date.now()}-${randomBytes(4).toString("hex")}`,
+            name: String(input.name || account).trim().slice(0, 80),
+            account,
+            passwordHash: hashPassword(password),
+            email: String(input.email || "").trim().slice(0, 160),
+            role: normalizeRole(input.role),
+            status: normalizeStatus(input.status),
+            lastActive: String(input.lastActive || "从未登录"),
+            createdAt: new Date().toISOString()
+          });
+          knownAccounts.add(account.toLowerCase());
+          importedMembers += 1;
+        } catch {
+          // Skip invalid legacy records instead of blocking the remaining migration.
+        }
+      }
+      if (importedMembers) writeMembers(members);
+      const requests = readRegistrationRequests();
+      const pendingAccounts = new Set(requests.filter((item) => item.status === "待审核").map((item) => String(item.account || "").toLowerCase()));
+      let importedRequests = 0;
+      for (const input of Array.isArray(payload.registrationRequests) ? payload.registrationRequests : []) {
+        try {
+          if (String(input.status || "待审核") !== "待审核") continue;
+          const account = validateAccount(input.account);
+          const password = validatePassword(input.password);
+          if (knownAccounts.has(account.toLowerCase()) || pendingAccounts.has(account.toLowerCase())) continue;
+          requests.unshift({
+            id: `request-${Date.now()}-${randomBytes(4).toString("hex")}`,
+            name: String(input.name || account).trim().slice(0, 80),
+            account,
+            passwordHash: hashPassword(password),
+            email: String(input.email || "").trim().slice(0, 160),
+            message: String(input.message || "").trim().slice(0, 500),
+            role: "编辑者",
+            status: "待审核",
+            createdAt: new Date().toISOString()
+          });
+          pendingAccounts.add(account.toLowerCase());
+          importedRequests += 1;
+        } catch {
+          // Skip invalid legacy registration records.
+        }
+      }
+      if (importedRequests) writeRegistrationRequests(requests);
+      sendJson(res, 200, { code: 20000, data: { importedMembers, importedRequests } });
+    } catch (error) {
+      sendJson(res, 200, { code: 40000, message: error.message || "旧成员迁移失败" });
+    }
+    return;
+  }
+  if (requestUrl.pathname === "/api/members") {
+    try {
+      if (!requireAdmin(req)) throw new Error("仅管理员可管理成员");
+      if (req.method === "GET") {
+        sendJson(res, 200, { code: 20000, data: readMembers().map(publicMember) });
+        return;
+      }
+      if (req.method === "POST") {
+        const payload = JSON.parse((await readRequestBody(req)) || "{}");
+        const account = validateAccount(payload.account);
+        if (accountExists(account)) throw new Error("该账号已存在");
+        const password = validatePassword(payload.password);
+        const member = {
+          id: `member-${Date.now()}-${randomBytes(4).toString("hex")}`,
+          name: String(payload.name || account).trim().slice(0, 80),
+          account,
+          passwordHash: hashPassword(password),
+          email: String(payload.email || "").trim().slice(0, 160),
+          role: normalizeRole(payload.role),
+          status: normalizeStatus(payload.status),
+          lastActive: "从未登录",
+          createdAt: new Date().toISOString()
+        };
+        const members = readMembers();
+        members.unshift(member);
+        writeMembers(members);
+        sendJson(res, 200, { code: 20000, data: publicMember(member) });
+        return;
+      }
+      sendJson(res, 405, { code: 40500, message: "Method Not Allowed" });
+    } catch (error) {
+      sendJson(res, 200, { code: 40000, message: error.message || "成员操作失败" });
+    }
+    return;
+  }
+  const memberRoute = requestUrl.pathname.match(/^\/api\/members\/([^/]+)$/);
+  if (memberRoute) {
+    try {
+      const payload = req.method === "PUT" ? JSON.parse((await readRequestBody(req)) || "{}") : {};
+      if (!requireAdmin(req, payload)) throw new Error("仅管理员可管理成员");
+      const memberId = decodeURIComponent(memberRoute[1]);
+      const members = readMembers();
+      const index = members.findIndex((member) => member.id === memberId);
+      if (index < 0) throw new Error("成员不存在");
+      if (req.method === "DELETE") {
+        members.splice(index, 1);
+        writeMembers(members);
+        sendJson(res, 200, { code: 20000, data: "success" });
+        return;
+      }
+      if (req.method === "PUT") {
+        const account = validateAccount(payload.account);
+        if (accountExists(account, memberId)) throw new Error("该账号已存在");
+        const password = validatePassword(payload.password, false);
+        const updated = {
+          ...members[index],
+          name: String(payload.name || account).trim().slice(0, 80),
+          account,
+          email: String(payload.email || "").trim().slice(0, 160),
+          role: normalizeRole(payload.role),
+          status: normalizeStatus(payload.status),
+          ...(password ? { passwordHash: hashPassword(password) } : {})
+        };
+        members[index] = updated;
+        writeMembers(members);
+        sendJson(res, 200, { code: 20000, data: publicMember(updated) });
+        return;
+      }
+      sendJson(res, 405, { code: 40500, message: "Method Not Allowed" });
+    } catch (error) {
+      sendJson(res, 200, { code: 40000, message: error.message || "成员操作失败" });
+    }
+    return;
+  }
+  if (requestUrl.pathname === "/api/registration-requests") {
+    try {
+      if (req.method === "GET") {
+        if (!requireAdmin(req)) throw new Error("仅管理员可查看注册申请");
+        sendJson(res, 200, { code: 20000, data: readRegistrationRequests().map(publicRegistrationRequest) });
+        return;
+      }
+      if (req.method === "POST") {
+        const payload = JSON.parse((await readRequestBody(req)) || "{}");
+        const name = String(payload.name || "").trim().slice(0, 80);
+        const account = validateAccount(payload.account);
+        const password = validatePassword(payload.password);
+        const email = String(payload.email || "").trim().slice(0, 160);
+        if (!name || !email) throw new Error("请填写姓名和邮箱");
+        if (accountExists(account)) throw new Error("该账号已存在");
+        const requests = readRegistrationRequests();
+        if (requests.some((item) => item.status === "待审核" && String(item.account).toLowerCase() === account.toLowerCase())) {
+          throw new Error("该账号已有待审核申请");
+        }
+        const request = {
+          id: `request-${Date.now()}-${randomBytes(4).toString("hex")}`,
+          name,
+          account,
+          passwordHash: hashPassword(password),
+          email,
+          message: String(payload.message || "").trim().slice(0, 500),
+          role: "编辑者",
+          status: "待审核",
+          createdAt: new Date().toISOString()
+        };
+        requests.unshift(request);
+        writeRegistrationRequests(requests);
+        sendJson(res, 200, { code: 20000, data: publicRegistrationRequest(request) });
+        return;
+      }
+      sendJson(res, 405, { code: 40500, message: "Method Not Allowed" });
+    } catch (error) {
+      sendJson(res, 200, { code: 40000, message: error.message || "注册申请操作失败" });
+    }
+    return;
+  }
+  const registrationActionRoute = requestUrl.pathname.match(/^\/api\/registration-requests\/([^/]+)\/(approve|reject)$/);
+  if (registrationActionRoute && req.method === "POST") {
+    try {
+      const payload = JSON.parse((await readRequestBody(req)) || "{}");
+      if (!requireAdmin(req, payload)) throw new Error("仅管理员可审核注册申请");
+      const requestId = decodeURIComponent(registrationActionRoute[1]);
+      const action = registrationActionRoute[2];
+      const requests = readRegistrationRequests();
+      const index = requests.findIndex((item) => item.id === requestId);
+      if (index < 0) throw new Error("注册申请不存在");
+      if (requests[index].status !== "待审核") throw new Error("该申请已处理");
+      if (action === "approve") {
+        const request = requests[index];
+        if (accountExists(request.account)) throw new Error("该账号已存在，无法重复同意");
+        const member = {
+          id: `member-${Date.now()}-${randomBytes(4).toString("hex")}`,
+          name: request.name,
+          account: request.account,
+          passwordHash: request.passwordHash,
+          email: request.email,
+          role: normalizeRole(payload.role || request.role),
+          status: "启用",
+          lastActive: "从未登录",
+          createdAt: new Date().toISOString()
+        };
+        const members = readMembers();
+        members.unshift(member);
+        writeMembers(members);
+        requests[index] = { ...request, status: "已同意", passwordHash: "", processedAt: new Date().toISOString() };
+      } else {
+        requests[index] = { ...requests[index], status: "已拒绝", passwordHash: "", processedAt: new Date().toISOString() };
+      }
+      writeRegistrationRequests(requests);
+      sendJson(res, 200, { code: 20000, data: publicRegistrationRequest(requests[index]) });
+    } catch (error) {
+      sendJson(res, 200, { code: 40000, message: error.message || "审核注册申请失败" });
+    }
     return;
   }
   if (requestUrl.pathname === "/api/import-link") {

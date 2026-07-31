@@ -13,7 +13,7 @@
 线上由两部分组成：
 
 1. Nginx 提供 `outputs/` 静态页面。
-2. PM2 运行 `scripts/preview-server.js`，Nginx 将 `/api/` 反向代理到 `127.0.0.1:8099`。
+2. PM2 或已有的 `clink-ai-api.service` 运行 `scripts/preview-server.js`，Nginx 将 `/api/` 反向代理到 `127.0.0.1:8099`。
 
 首次部署：
 
@@ -31,7 +31,7 @@ CLINK_ADMIN_PASSWORD=use-a-strong-private-password
 CLINK_AUTH_SECRET=use-at-least-32-random-characters
 ```
 
-管理员密码只保存在服务器私有环境中。修改配置后需要重启 PM2。
+管理员密码只保存在服务器私有环境中。成员及注册申请保存在 `PROJECT_DATA_DIR` 下，密码只保存 scrypt 哈希。修改配置后需要重启进程管理器。
 
 在宝塔的网站 Nginx 配置的 `server {}` 中加入 `deploy/nginx-api.conf` 的 `location` 内容，然后重载 Nginx。
 
