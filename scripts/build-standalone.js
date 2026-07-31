@@ -369,7 +369,7 @@ function renderHtml({ docs, navItems }) {
       <footer class="desktop-footer" aria-label="项目底部信息">
         <div class="desktop-footer-left">
           <span>© 2026 Clink AI. All rights reserved.</span>
-          <b>版本 v2.1.0</b>
+          <b>版本 v2.1.1</b>
         </div>
         <nav class="desktop-footer-links" aria-label="帮助入口">
           <a href="javascript:void(0)" role="button">隐私政策</a>

@@ -126,11 +126,7 @@
 <script>
 const STORAGE_KEY = 'kb-admin-members'
 const REGISTRATION_REQUESTS_KEY = 'kb-registration-requests'
-const defaultMembers = [
-  { id: 'm-admin', name: '管理员', account: 'admin', password: '111111', email: 'admin@w-shawn.cn', role: '管理员', status: '启用', lastActive: '今天' },
-  { id: 'm-editor', name: '内容编辑', account: 'editor', password: '111111', email: 'editor@w-shawn.cn', role: '编辑者', status: '启用', lastActive: '昨天' },
-  { id: 'm-visitor', name: '观察员', account: 'visitor', password: '111111', email: 'visitor@w-shawn.cn', role: '访客', status: '停用', lastActive: '3 天前' }
-]
+const defaultMembers = []
 
 function createBlankForm() {
   return {
@@ -151,7 +147,7 @@ function normalizeMember(member) {
     ...member,
     name,
     account: String(member.account || fallbackAccount),
-    password: String(member.password || '111111'),
+    password: String(member.password || ''),
     email,
     role: String(member.role || '编辑者'),
     status: String(member.status || '启用'),
@@ -193,7 +189,7 @@ export default {
     loadMembers() {
       try {
         const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null')
-        return (Array.isArray(saved) && saved.length ? saved : defaultMembers).map(normalizeMember)
+        return (Array.isArray(saved) ? saved : defaultMembers).map(normalizeMember)
       } catch (error) {
         return defaultMembers.map(normalizeMember)
       }

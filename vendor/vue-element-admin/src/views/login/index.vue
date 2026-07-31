@@ -50,16 +50,7 @@
 
       <el-button :loading="loading" type="primary" style="width:100%;margin-bottom:30px;" @click.native.prevent="handleLogin">{{ text.login }}</el-button>
 
-      <div style="position:relative">
-        <div class="tips">
-          <span>{{ text.adminTip }}</span>
-          <span>{{ text.anyPassword }}</span>
-        </div>
-        <div class="tips">
-          <span style="margin-right:18px;">{{ text.editorTip }}</span>
-          <span>{{ text.anyPassword }}</span>
-        </div>
-      </div>
+      <div class="login-access-note">仅支持管理员已批准或在后台创建的账号登录。</div>
     </el-form>
   </div>
 </template>
@@ -114,9 +105,6 @@ export default {
         password: t('password', this.lang),
         login: t('login', this.lang),
         rememberLogin: t('rememberLogin', this.lang),
-        adminTip: t('adminTip', this.lang),
-        editorTip: t('editorTip', this.lang),
-        anyPassword: t('anyPassword', this.lang),
         capsLock: t('capsLock', this.lang)
       }
     },
@@ -287,6 +275,13 @@ $cursor: #fff;
     border-radius: 5px;
     color: #454545;
   }
+}
+
+.login-access-note {
+  color: rgba(255, 255, 255, .72);
+  font-size: 14px;
+  line-height: 1.6;
+  text-align: center;
 }
 </style>
 

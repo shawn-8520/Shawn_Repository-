@@ -339,14 +339,17 @@ function setAgentDisplayMode(mode) {
   appGrid.querySelectorAll(".agent-card.orbit-hovered").forEach((card) => card.classList.remove("orbit-hovered"));
   localStorage.setItem(AGENT_VIEW_MODE_KEY, agentDisplayMode);
   applyAgentDisplayMode();
-  if (agentDisplayMode === "orbit") layoutAgentOrbitCards();
+  agentOrbitNeedsLayout = true;
+  if (agentDisplayMode === "orbit") layoutAgentOrbitCards(true);
 }
 
-function layoutAgentOrbitCards() {
+function layoutAgentOrbitCards(force = false) {
   if (agentDisplayMode !== "orbit") return;
   const cards = [...appGrid.querySelectorAll(".agent-card")];
   const total = cards.length;
   if (!total) return;
+  if (!force && !agentOrbitNeedsLayout) return;
+  agentOrbitNeedsLayout = false;
   const radiusX = Math.min(300, Math.max(215, appGrid.clientWidth * 0.34));
   const radiusY = Math.min(102, Math.max(72, appGrid.clientHeight * 0.16));
   cards.forEach((card, index) => {
@@ -373,8 +376,11 @@ function animateAgentOrbit(timestamp) {
   if (!agentOrbitLast) agentOrbitLast = timestamp;
   const delta = Math.min(48, timestamp - agentOrbitLast);
   agentOrbitLast = timestamp;
-  if (document.body.classList.contains("desktop-mode") && agentDisplayMode === "orbit" && !agentOrbitPaused && !reducedMotion) {
-    agentOrbitPhase = (agentOrbitPhase + delta * 0.00007) % (Math.PI * 2);
+  const shouldAnimate = !document.hidden && document.body.classList.contains("desktop-mode") && agentDisplayMode === "orbit" && !agentOrbitPaused && !reducedMotion;
+  if (shouldAnimate) {
+    agentOrbitPhase += delta * 0.00007;
+    if (agentOrbitPhase > Math.PI * 2000) agentOrbitPhase %= Math.PI * 2;
+    agentOrbitNeedsLayout = true;
   }
   layoutAgentOrbitCards();
   agentOrbitFrame = requestAnimationFrame(animateAgentOrbit);
@@ -588,7 +594,8 @@ function renderDesktopItems() {
     ? visible.map((item, index) => renderAppCard(item, index, visible.length)).join("")
     : '<div class="agent-search-empty"><strong>没有匹配的智能体</strong><span>请调整搜索词，或切换左侧智能体分类。</span></div>';
   applyAgentDisplayMode();
-  layoutAgentOrbitCards();
+  agentOrbitNeedsLayout = true;
+  layoutAgentOrbitCards(true);
   renderAgentDashboard(visible, allItems);
 }
 

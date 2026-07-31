@@ -31,28 +31,34 @@ function SettingsModal({ open, onClose }) {
   const [saving, setSaving] = useState(false);
   const [configured, setConfigured] = useState(false);
   const [preset, setPreset] = useState("");
+  const [connections, setConnections] = useState([]);
+  const [connectionId, setConnectionId] = useState("");
+
+  const editConnection = (id, rows = connections) => {
+    const selected = rows.find((item) => item.id === id);
+    setConnectionId(selected?.id || "");
+    setConfigured(Boolean(selected?.hasApiKey));
+    setPreset(selected?.preset || "");
+    form.setFieldsValue({
+      preset: selected?.preset || "",
+      baseUrl: selected?.baseUrl || "",
+      apiKey: ""
+    });
+  };
+
+  const loadConnections = async (preferredId = "") => {
+    const payload = await window.__WORKBENCH_BRIDGE__.loadModelSettings();
+    const data = payload.data || {};
+    const rows = Array.isArray(data.connections) ? data.connections : [];
+    setConnections(rows);
+    editConnection(preferredId || data.defaultConnectionId || rows[0]?.id || "", rows);
+    return data;
+  };
 
   useEffect(() => {
     if (!open) return;
-    fetch("/api/model-settings")
-      .then((response) => response.json())
-      .then((payload) => {
-        if (!payload.ok) throw new Error(payload.message);
-        const data = payload.data || {};
-        const defaultModel = normalizeConfiguredModelId(data.defaultModel);
-        const matchedPreset = data.preset || Object.entries(modelPresets).find(([, item]) => (
-          item.defaultModel === defaultModel
-        ))?.[0] || "";
-        setConfigured(Boolean(data.hasApiKey));
-        setPreset(matchedPreset);
-        form.setFieldsValue({
-          preset: matchedPreset,
-          baseUrl: data.baseUrl || "",
-          apiKey: ""
-        });
-      })
-      .catch((error) => message.error(error.message || "模型配置读取失败"));
-  }, [open, form]);
+    loadConnections().catch((error) => message.error(error.message || "模型配置读取失败"));
+  }, [open]);
 
   const save = async () => {
     const values = await form.validateFields();
@@ -64,14 +70,15 @@ function SettingsModal({ open, onClose }) {
     setSaving(true);
     try {
       const payload = await window.__WORKBENCH_BRIDGE__.saveModelSettings({
+        connectionId: connectionId || undefined,
         preset: values.preset,
         baseUrl: values.baseUrl,
         apiKey: values.apiKey || undefined
       });
-      setConfigured(Boolean(payload.data?.hasApiKey));
+      const savedId = connectionId || payload.data?.connections?.at(-1)?.id || "";
+      await loadConnections(savedId);
       window.dispatchEvent(new CustomEvent("workbench-model-settings-updated", { detail: payload.data }));
-      message.success(`已接入模型预设：${payload.data?.presetLabel || selectedPreset.label}`);
-      onClose();
+      message.success(`已保存模型连接：${selectedPreset.label}`);
     } catch (error) {
       message.error(error.message || "保存失败");
     } finally {
@@ -90,10 +97,30 @@ function SettingsModal({ open, onClose }) {
   };
 
   const activePreset = modelPresets[preset];
+  const startNewConnection = () => {
+    setConnectionId("");
+    setConfigured(false);
+    setPreset("");
+    form.resetFields();
+  };
 
   return (
     <Modal centered destroyOnHidden open={open} title="工作台能力设置" okText="保存设置" cancelText="取消" confirmLoading={saving} onOk={save} onCancel={onClose} width={560}>
       <Form form={form} layout="vertical">
+        <Form.Item label="已添加的 API / 模型连接">
+          <Space.Compact block>
+            <Select
+              value={connectionId || undefined}
+              placeholder={connections.length ? "选择已添加连接" : "暂无连接"}
+              options={connections.map((item) => ({
+                value: item.id,
+                label: `${item.presetLabel || item.provider} / ${item.defaultModel}`
+              }))}
+              onChange={(value) => editConnection(value)}
+            />
+            <Button icon={<PlusOutlined />} onClick={startNewConnection}>新增连接</Button>
+          </Space.Compact>
+        </Form.Item>
         <Form.Item label="模型预设" name="preset" rules={[{ required: true, message: "请选择模型预设" }]}>
           <Select
             placeholder="选择模型预设"
@@ -1168,7 +1195,18 @@ function UserArea() {
     const token = cookie
       ? decodeURIComponent(cookie.split("=").slice(1).join("="))
       : localStorage.getItem("Admin-Token") || "";
-    return token === "admin-token";
+    if (!token.startsWith("member-token-")) return false;
+    const account = decodeURIComponent(token.replace("member-token-", ""));
+    try {
+      const members = JSON.parse(localStorage.getItem("kb-admin-members") || "[]");
+      return Array.isArray(members) && members.some((member) => (
+        member.account === account
+        && member.status === "启用"
+        && member.role === "管理员"
+      ));
+    } catch (error) {
+      return false;
+    }
   })();
   const menu = {
     items: [

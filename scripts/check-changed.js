@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import vm from "node:vm";
 
 const root = process.cwd();
 const status = execFileSync("git", ["status", "--porcelain=v1"], { cwd: root, encoding: "utf8" });
@@ -47,4 +48,20 @@ for (const check of checks) {
     process.exit(result.status || 1);
   }
   console.log("通过");
+}
+
+const standaloneOutput = path.join(root, "outputs", "ai-terminal-kb.html");
+if (fs.existsSync(standaloneOutput)) {
+  const html = fs.readFileSync(standaloneOutput, "utf8");
+  const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)];
+  for (const [index, match] of scripts.entries()) {
+    try {
+      new vm.Script(match[1], { filename: `standalone-inline-${index}.js` });
+    } catch (error) {
+      console.error(`- 单文件内联脚本 ${index + 1} ... 失败`);
+      console.error(error.message);
+      process.exit(1);
+    }
+  }
+  console.log(`- 单文件内联脚本 ${scripts.length} 段 ... 通过`);
 }

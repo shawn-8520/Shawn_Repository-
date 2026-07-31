@@ -398,7 +398,7 @@ body.desktop-mode .app-card[data-ext=".html"]{--file-a:#ffb15f;--file-b:#f05c28;
 body.desktop-mode .app-card[data-ext=".pdf"]{--file-a:#ff8a7e;--file-b:#e23835;--file-text:#ba2525;--file-shadow:rgba(186,37,37,.24)}
 body.desktop-mode .app-card:not([data-ext=".md"]):not([data-ext=".txt"]):not([data-ext=".json"]):not([data-ext=".csv"]):not([data-ext=".html"]):not([data-ext=".pdf"]){--file-a:#8bc9ff;--file-b:#2b83d3;--file-text:#0d4d86;--file-shadow:rgba(13,77,134,.24)}
 body.desktop-mode .app-card.agent-card{display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start;width:150px;height:168px;border:1px solid #cfe0f3;border-radius:10px!important;padding:12px 10px 46px;background:rgba(255,255,255,.88)!important;color:#162236;text-align:left;box-shadow:0 8px 24px rgba(31,89,153,.08)!important;backdrop-filter:blur(18px);overflow:hidden;cursor:pointer}
-body.desktop-mode .app-card.agent-card:hover,body.desktop-mode .app-card.agent-card.selected{transform:translateY(-1px);box-shadow:0 12px 28px rgba(31,89,153,.14)!important}
+body.desktop-mode .app-grid.grid-view .app-card.agent-card:hover,body.desktop-mode .app-grid.grid-view .app-card.agent-card.selected{transform:translateY(-1px);box-shadow:0 12px 28px rgba(31,89,153,.14)!important}
 body.desktop-mode .app-card.agent-card.selected{background:rgba(255,255,255,.96)!important;border-color:#0b67e9;box-shadow:0 0 0 2px rgba(11,103,233,.2),0 12px 28px rgba(31,89,153,.14)!important}
 body.desktop-mode .app-card.agent-card:before,body.desktop-mode .app-card.agent-card:after{display:none!important}
 body.desktop-mode .agent-card-head{display:grid;grid-template-columns:36px 1fr;gap:9px;align-items:center;min-width:0;min-height:38px}
@@ -563,10 +563,13 @@ body.desktop-mode .app-grid{perspective:1500px;transform-style:preserve-3d;isola
 body.desktop-mode .app-grid.orbit-view{cursor:grab;touch-action:none}
 body.desktop-mode .app-grid.orbit-view.orbit-dragging{cursor:grabbing}
 body.desktop-mode .app-grid:before{content:"";position:absolute;left:11%;right:11%;top:48%;height:35%;border-radius:50%;background:radial-gradient(ellipse,rgba(35,91,153,.2),rgba(63,143,222,.08) 42%,transparent 72%);filter:blur(15px);pointer-events:none}
-body.desktop-mode .app-card.agent-card{left:50%!important;top:48%!important;width:176px;height:226px;padding:15px 13px 50px;border:1px solid rgba(193,216,242,.95);border-radius:13px!important;background:linear-gradient(155deg,rgba(255,255,255,.97),rgba(226,242,255,.9))!important;box-shadow:0 18px 36px rgba(27,77,132,.18)!important;opacity:var(--orbit-opacity,1);transform:translate(-50%,-50%) translate3d(var(--orbit-x,0px),var(--orbit-y,0px),var(--orbit-z,0px)) rotateY(var(--orbit-tilt,0deg)) scale(var(--orbit-scale,1));transform-origin:50% 100%;transform-style:preserve-3d;z-index:var(--orbit-order,200);will-change:transform,opacity,box-shadow;-webkit-user-select:none;user-select:none;transition:transform .12s linear,opacity .2s ease,box-shadow .28s ease,border-color .2s ease,filter .2s ease}
+@property --orbit-lift{syntax:"<length>";inherits:false;initial-value:0px}
+@property --orbit-pop{syntax:"<length>";inherits:false;initial-value:0px}
+@property --orbit-boost{syntax:"<number>";inherits:false;initial-value:0}
+body.desktop-mode .app-card.agent-card{--orbit-lift:0px;--orbit-pop:0px;--orbit-boost:0;left:50%!important;top:48%!important;width:176px;height:226px;padding:15px 13px 50px;border:1px solid rgba(193,216,242,.95);border-radius:13px!important;background:linear-gradient(155deg,rgba(255,255,255,.97),rgba(226,242,255,.9))!important;box-shadow:0 18px 36px rgba(27,77,132,.18)!important;opacity:var(--orbit-opacity,1);transform:translate(-50%,-50%) translate3d(var(--orbit-x,0px),calc(var(--orbit-y,0px) - var(--orbit-lift)),calc(var(--orbit-z,0px) + var(--orbit-pop))) rotateY(var(--orbit-tilt,0deg)) scale(calc(var(--orbit-scale,1) + var(--orbit-boost)));transform-origin:50% 100%;transform-style:preserve-3d;z-index:var(--orbit-order,200);will-change:transform,opacity;-webkit-user-select:none;user-select:none;transition:--orbit-lift .28s cubic-bezier(.2,.8,.2,1),--orbit-pop .28s cubic-bezier(.2,.8,.2,1),--orbit-boost .28s cubic-bezier(.2,.8,.2,1),box-shadow .28s ease,border-color .2s ease,filter .2s ease}
 body.desktop-mode .app-card.agent-card:before,body.desktop-mode .app-card.agent-card:after{display:none!important;content:none!important}
-body.desktop-mode .app-card.agent-card:hover,body.desktop-mode .app-card.agent-card.orbit-hovered,body.desktop-mode .app-card.agent-card:focus-visible{z-index:600!important;outline:0;opacity:1;filter:saturate(1.08);border-color:#4e9cf1;box-shadow:0 34px 64px rgba(26,80,139,.3)!important;transform:translate(-50%,-50%) translate3d(var(--orbit-x,0px),calc(var(--orbit-y,0px) - 46px),calc(var(--orbit-z,0px) + 220px)) rotateY(0deg) scale(calc(var(--orbit-scale,1) + .14))}
-body.desktop-mode .app-card.agent-card.selected{background:linear-gradient(155deg,#fff,#e4f2ff)!important;border-color:#075ee6;box-shadow:0 0 0 2px rgba(7,94,230,.17),0 22px 44px rgba(26,80,139,.22)!important;opacity:var(--orbit-opacity,1);transform:translate(-50%,-50%) translate3d(var(--orbit-x,0px),var(--orbit-y,0px),var(--orbit-z,0px)) rotateY(var(--orbit-tilt,0deg)) scale(var(--orbit-scale,1))}
+body.desktop-mode .app-card.agent-card:hover,body.desktop-mode .app-card.agent-card.orbit-hovered,body.desktop-mode .app-card.agent-card:focus-visible{--orbit-lift:40px;--orbit-pop:180px;--orbit-boost:.12;z-index:600!important;outline:0;opacity:1;filter:saturate(1.08);border-color:#4e9cf1;box-shadow:0 34px 64px rgba(26,80,139,.3)!important}
+body.desktop-mode .app-card.agent-card.selected{background:linear-gradient(155deg,#fff,#e4f2ff)!important;border-color:#075ee6;box-shadow:0 0 0 2px rgba(7,94,230,.17),0 22px 44px rgba(26,80,139,.22)!important;opacity:var(--orbit-opacity,1)}
 body.desktop-mode .app-card.agent-card.selected:hover,body.desktop-mode .app-card.agent-card.selected.orbit-hovered{z-index:620!important}
 body.desktop-mode .app-card.agent-card .agent-card-head{grid-template-columns:42px 1fr;min-height:46px}
 body.desktop-mode .app-card.agent-card .agent-avatar{width:42px;height:42px;border-radius:13px;font-size:15px}
@@ -581,6 +584,23 @@ body.desktop-mode .app-grid.grid-view{display:grid;grid-template-columns:repeat(
 body.desktop-mode .app-grid.grid-view:before{display:none}
 body.desktop-mode .app-grid.grid-view .app-card.agent-card{position:relative!important;left:auto!important;top:auto!important;width:100%;height:226px;opacity:1!important;z-index:auto!important;transform:none!important;transition:transform .24s cubic-bezier(.2,.8,.2,1),box-shadow .24s ease,border-color .2s ease}
 body.desktop-mode .app-grid.grid-view .app-card.agent-card:hover,body.desktop-mode .app-grid.grid-view .app-card.agent-card:focus-visible{z-index:2!important;transform:translateY(-5px)!important;box-shadow:0 22px 44px rgba(26,80,139,.22)!important}
+html.desktop-compact body.desktop-mode .os-board{--agent-lower-height:96px;--agent-lower-offset:124px}
+html.desktop-compact body.desktop-mode .desktop-dashboard-right{top:54px}
+html.desktop-compact body.desktop-mode .agent-stat-grid{top:54px}
+html.desktop-compact body.desktop-mode .agent-stat-grid article{min-height:88px;padding-top:12px;padding-bottom:10px}
+html.desktop-compact body.desktop-mode .agent-stat-grid span{margin-top:8px}
+html.desktop-compact body.desktop-mode .agent-board-panel,
+html.desktop-compact body.desktop-mode .desktop-surface{top:158px}
+body.desktop-mode .agent-stat-grid article,
+body.desktop-mode .agent-board-panel,
+body.desktop-mode .desktop-surface,
+body.desktop-mode .desktop-dashboard-right,
+body.desktop-mode .agent-lower-panels{animation:agentPanelReveal .42s cubic-bezier(.2,.8,.2,1) both}
+body.desktop-mode .agent-stat-grid article:nth-child(2){animation-delay:.035s}
+body.desktop-mode .agent-stat-grid article:nth-child(3){animation-delay:.07s}
+body.desktop-mode .agent-stat-grid article:nth-child(4){animation-delay:.105s}
+body.desktop-mode .agent-stat-grid article:nth-child(5){animation-delay:.14s}
+@keyframes agentPanelReveal{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 body.desktop-mode .agent-window.agent-window-centered{position:fixed!important;max-height:calc(100vh - 48px);overflow:hidden}
 body.desktop-mode .agent-window.agent-window-centered .agent-chat-body{max-height:calc(100vh - 104px);overflow:auto;overscroll-behavior:contain}
 body .os-window.product-window-centered{position:fixed!important;max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);overflow:hidden}
@@ -614,7 +634,7 @@ body.desktop-mode .desktop-footer-links a:hover,body.desktop-mode .desktop-foote
 .help-docs-list li{border:1px solid #d9e8f6;border-radius:12px;background:#f7fbff;padding:11px 12px}
 .help-docs-list b{display:block;color:#0f2a44;font-size:13px;margin-bottom:4px}
 .help-docs-list span{display:block;color:#5a7088;font-size:11px;line-height:1.55}
-@media(prefers-reduced-motion:reduce){body.desktop-mode .app-card.agent-card{transition:none}body.desktop-mode .app-card.agent-card:hover,body.desktop-mode .app-card.agent-card.orbit-hovered,body.desktop-mode .app-card.agent-card:focus-visible{transform:translate(-50%,-50%) translate3d(var(--orbit-x,0px),calc(var(--orbit-y,0px) - 18px),calc(var(--orbit-z,0px) + 40px)) rotateY(0deg) scale(var(--orbit-scale,1))}}
+@media(prefers-reduced-motion:reduce){body.desktop-mode .app-card.agent-card{transition:none}body.desktop-mode .app-card.agent-card:hover,body.desktop-mode .app-card.agent-card.orbit-hovered,body.desktop-mode .app-card.agent-card:focus-visible{--orbit-lift:18px;--orbit-boost:0}body.desktop-mode .agent-stat-grid article,body.desktop-mode .agent-board-panel,body.desktop-mode .desktop-surface,body.desktop-mode .desktop-dashboard-right,body.desktop-mode .agent-lower-panels{animation:none}}
 body.desktop-mode .desktop-tools{left:0;right:0;top:0;z-index:8;height:34px;border:0;border-radius:0;background:transparent;box-shadow:none;backdrop-filter:none;pointer-events:none;transform:none}
 body.desktop-mode .desktop-search-slot{position:absolute;left:50%;top:0;transform:translateX(-50%);pointer-events:auto}
 body.desktop-mode .desktop-tool-actions{position:absolute;right:var(--agent-main-right);top:0;display:flex;align-items:center;gap:8px;pointer-events:auto}
@@ -776,4 +796,3 @@ body.desktop-mode .agent-resource-panel [data-updated]{display:block;margin-top:
 @media(max-width:900px){.site-shell,.works-page,.system-page{padding-inline:18px}.topbar{border-radius:24px}.work-grid,.works-grid{gap:14px}}
 `;
 }
-

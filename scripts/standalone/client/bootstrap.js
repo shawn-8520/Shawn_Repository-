@@ -96,6 +96,8 @@ let agentOrbitFrame = 0;
 let agentOrbitLast = 0;
 let agentOrbitPaused = false;
 let agentOrbitDragging = false;
+let agentOrbitNeedsLayout = true;
+let desktopResizeFrame = 0;
 let agentDisplayMode = localStorage.getItem(AGENT_VIEW_MODE_KEY) === "grid" ? "grid" : "orbit";
 let activeAgentCategory = "all";
 let agentStatusFilter = "all";
@@ -140,6 +142,8 @@ let activeModelSettings = {
   presetLabel: "",
   defaultModel: "",
   models: [],
+  modelOptions: [],
+  connections: [],
   ready: false
 };
 window.__WORKBENCH_MODEL_AVAILABILITY__ = {
@@ -152,9 +156,44 @@ function normalizeAgentModelValue(value) {
   return String(value || "").trim().replace(/^Open WebUI\\s*\\/\\s*/i, "");
 }
 
+async function requestProjectJson(endpoint, options = {}) {
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      ...options,
+      headers: {
+        Accept: "application/json",
+        ...(options.headers || {})
+      }
+    });
+  } catch (error) {
+    throw new Error("无法连接项目 API 服务，请检查线上服务状态");
+  }
+  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+  const text = await response.text();
+  if (!contentType.includes("application/json")) {
+    const looksLikeHtml = /^\\s*<!doctype html|^\\s*<html/i.test(text);
+    throw new Error(looksLikeHtml
+      ? "线上 API 服务未启用，请检查宝塔 /api/ 反向代理"
+      : "项目 API 返回格式异常");
+  }
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch (error) {
+    throw new Error("项目 API 返回了无效 JSON");
+  }
+  if (!response.ok || payload?.ok === false) {
+    throw new Error(payload?.message || "项目 API 请求失败");
+  }
+  return payload;
+}
+
 function configuredModelOptions(settings = activeModelSettings) {
   if (!settings.ready) return [];
-  return [normalizeAgentModelValue(settings.defaultModel)].filter(Boolean);
+  return (Array.isArray(settings.modelOptions) ? settings.modelOptions : [])
+    .map((option) => normalizeAgentModelValue(option?.value))
+    .filter(Boolean);
 }
 
 function resolveAgentModelValue(value) {
@@ -162,18 +201,20 @@ function resolveAgentModelValue(value) {
   const configured = configuredModelOptions();
   if (!configured.length) return "";
   const exact = configured.find((option) => option.toLowerCase() === current.toLowerCase());
-  return exact || normalizeAgentModelValue(activeModelSettings.defaultModel) || configured[0];
+  return exact || "";
 }
 
 function agentModelDisplayName(value) {
   const model = resolveAgentModelValue(value);
-  if (model && model === normalizeAgentModelValue(activeModelSettings.defaultModel) && activeModelSettings.presetLabel) {
-    return activeModelSettings.presetLabel;
-  }
+  const configuredOption = activeModelSettings.modelOptions.find((option) => (
+    normalizeAgentModelValue(option?.value) === model
+  ));
+  if (configuredOption?.label) return configuredOption.label;
   const aliases = {
     "kimi-k3": "Kimi K3"
   };
-  return aliases[model.toLowerCase()] || model || "未接入模型";
+  const bareModel = model.includes("::") ? model.split("::").slice(1).join("::") : model;
+  return aliases[bareModel.toLowerCase()] || bareModel || "未接入模型";
 }
 
 const agentKnowledgeOptions = [
@@ -328,12 +369,17 @@ function renderAnnouncements(items = []) {
 }
 
 function applyPublicModelSettings(settings = {}) {
-  const ready = Boolean(
-    settings.ready
-    && settings.hasApiKey
-    && settings.baseUrl
-    && settings.defaultModel
-  );
+  const modelOptions = Array.isArray(settings.modelOptions)
+    ? settings.modelOptions
+      .map((option) => ({
+        value: normalizeAgentModelValue(option?.value),
+        label: String(option?.label || option?.model || "").trim(),
+        connectionId: String(option?.connectionId || ""),
+        model: String(option?.model || "")
+      }))
+      .filter((option) => option.value && option.label)
+    : [];
+  const ready = Boolean(settings.ready && modelOptions.length);
   activeModelSettings = {
     preset: String(settings.preset || ""),
     presetLabel: String(settings.presetLabel || ""),
@@ -344,6 +390,8 @@ function applyPublicModelSettings(settings = {}) {
     availableModels: Array.isArray(settings.availableModels)
       ? settings.availableModels.map(normalizeAgentModelValue).filter(Boolean)
       : [],
+    modelOptions,
+    connections: Array.isArray(settings.connections) ? settings.connections : [],
     ready
   };
   const configured = configuredModelOptions(activeModelSettings);
@@ -362,8 +410,7 @@ async function refreshWorkbenchData() {
   const requests = [
     fetch(RUNTIME_STATS_ENDPOINT).then((response) => response.json()).then((payload) => payload.ok && applyRuntimeStats(payload.data)),
     fetch(ANNOUNCEMENTS_ENDPOINT).then((response) => response.json()).then((payload) => payload.ok && renderAnnouncements(payload.data)),
-    fetch(MODEL_SETTINGS_ENDPOINT).then((response) => response.json()).then((payload) => {
-      if (!payload.ok) return;
+    requestProjectJson(MODEL_SETTINGS_ENDPOINT).then((payload) => {
       applyPublicModelSettings(payload.data);
       renderDesktopItems();
     })
@@ -372,46 +419,18 @@ async function refreshWorkbenchData() {
 }
 
 window.__WORKBENCH_BRIDGE__ = {
+  loadModelSettings: async () => {
+    return requestProjectJson(MODEL_SETTINGS_ENDPOINT);
+  },
   saveModelSettings: async (settings) => {
     const data = {
       ...settings,
       adminToken: getAdminTokenValue()
     };
-    return await new Promise((resolve, reject) => {
-      const frameName = "model-settings-frame-" + Date.now();
-      const frame = document.createElement("iframe");
-      const form = document.createElement("form");
-      const field = document.createElement("input");
-      frame.name = frameName;
-      frame.hidden = true;
-      form.hidden = true;
-      form.method = "POST";
-      form.action = "/api/model-settings-form";
-      form.target = frameName;
-      field.type = "hidden";
-      field.name = "payload";
-      field.value = JSON.stringify(data);
-      form.appendChild(field);
-      document.body.append(frame, form);
-      const cleanup = () => {
-        window.removeEventListener("message", onMessage);
-        frame.remove();
-        form.remove();
-      };
-      const timeout = setTimeout(() => {
-        cleanup();
-        reject(new Error("模型配置保存超时"));
-      }, 10000);
-      const onMessage = (event) => {
-        if (event.origin !== location.origin || event.source !== frame.contentWindow || event.data?.type !== "model-settings-saved") return;
-        clearTimeout(timeout);
-        const payload = event.data.payload || {};
-        cleanup();
-        if (!payload.ok) reject(new Error(payload.message || "模型配置保存失败"));
-        else resolve(payload);
-      };
-      window.addEventListener("message", onMessage);
-      form.submit();
+    return requestProjectJson(MODEL_SETTINGS_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data)
     });
   },
   discoverModels: async (settings) => {
@@ -471,14 +490,15 @@ function applyScrollLock() {
 
 function updateDesktopScale() {
   const designWidth = 1396;
-  const minimumDesignHeight = 930;
+  const compact = window.innerHeight < 860;
+  const minimumDesignHeight = compact ? 840 : 930;
   const topbarHeight = 47;
-  const navReserve = 80;
-  const sidePadding = 40;
+  const navReserve = compact ? 66 : 80;
+  const sidePadding = Math.max(24, Math.min(48, window.innerWidth * 0.028));
   const widthScale = (window.innerWidth - sidePadding) / designWidth;
   const availableHeight = Math.max(420, window.innerHeight - topbarHeight - navReserve);
   const heightScale = availableHeight / minimumDesignHeight;
-  desktopScale = Math.max(0.52, Math.min(2.4, widthScale, heightScale));
+  desktopScale = Math.max(0.62, Math.min(1.25, widthScale, heightScale));
   const designHeight = Math.max(minimumDesignHeight, availableHeight / desktopScale);
   const boardHeight = designHeight * desktopScale;
   const availableTop = topbarHeight + 10;
@@ -487,6 +507,20 @@ function updateDesktopScale() {
   document.documentElement.style.setProperty("--desktop-scale", desktopScale.toFixed(4));
   document.documentElement.style.setProperty("--desktop-top", top.toFixed(1) + "px");
   document.documentElement.style.setProperty("--desktop-board-height", designHeight.toFixed(1) + "px");
+  document.documentElement.classList.toggle("desktop-compact", compact);
+  agentOrbitNeedsLayout = true;
+}
+
+function scheduleDesktopResize() {
+  if (desktopResizeFrame) return;
+  desktopResizeFrame = requestAnimationFrame(() => {
+    desktopResizeFrame = 0;
+    updateDesktopScale();
+    updateNavIndicator();
+    if (document.body.classList.contains("desktop-mode")) {
+      layoutAgentOrbitCards(true);
+    }
+  });
 }
 
 function scaledPointerDelta(delta) {
@@ -602,10 +636,7 @@ pillNav.addEventListener("click", (event) => {
 });
 
 window.addEventListener("hashchange", () => switchTab(currentTab()));
-window.addEventListener("resize", () => {
-  updateDesktopScale();
-  updateNavIndicator();
-});
+window.addEventListener("resize", scheduleDesktopResize, { passive: true });
 document.addEventListener("wheel", (event) => {
   if (event.target.closest(".os-window")) {
     event.stopImmediatePropagation();
@@ -1021,8 +1052,9 @@ appGrid.addEventListener("pointerdown", (event) => {
     if (!gestureMode) startSelecting();
     if (gestureMode === "orbit") {
       moveEvent.preventDefault();
-      agentOrbitPhase = (startOrbitPhase + deltaX * 0.008) % (Math.PI * 2);
-      layoutAgentOrbitCards();
+      agentOrbitPhase = startOrbitPhase + deltaX * 0.008;
+      agentOrbitNeedsLayout = true;
+      layoutAgentOrbitCards(true);
       return;
     }
     startSelecting();
@@ -1069,10 +1101,6 @@ appGrid.addEventListener("pointerdown", (event) => {
 window.addEventListener("workbench-agent-search-change", (event) => {
   desktopSearchQuery = String(event.detail || "");
   renderDesktopItems();
-});
-window.addEventListener("resize", () => {
-  updateDesktopScale();
-  if (document.body.classList.contains("desktop-mode")) renderDesktopItems();
 });
 newFileBtn.addEventListener("click", () => {
   window.dispatchEvent(new CustomEvent("workbench-agent-create-open", {
@@ -1292,7 +1320,19 @@ function getAdminTokenValue() {
 }
 
 function isAdminUser() {
-  return getAdminTokenValue() === "admin-token";
+  const token = getAdminTokenValue();
+  if (!token.startsWith("member-token-")) return false;
+  const account = decodeURIComponent(token.replace("member-token-", ""));
+  try {
+    const members = JSON.parse(localStorage.getItem("kb-admin-members") || "[]");
+    return Array.isArray(members) && members.some((member) => (
+      member.account === account
+      && member.status === "启用"
+      && member.role === "管理员"
+    ));
+  } catch (error) {
+    return false;
+  }
 }
 
 function syncAdminOnlyVisibility() {

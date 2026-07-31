@@ -259,7 +259,16 @@ function writeJsonFile(filePath, value) {
 }
 
 function requireAdmin(req, payload) {
-  return req.headers["x-admin-token"] === "admin-token" || payload?.adminToken === "admin-token";
+  const token = String(req.headers["x-admin-token"] || payload?.adminToken || "");
+  const privateToken = String(process.env.CLINK_API_ADMIN_TOKEN || "");
+  if (privateToken && token === privateToken) return true;
+  if (!token.startsWith("member-token-")) return false;
+  const account = decodeURIComponent(token.replace("member-token-", ""));
+  const adminAccounts = String(process.env.CLINK_ADMIN_ACCOUNTS || "admin")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return adminAccounts.includes(account);
 }
 
 function defaultRuntimeStats() {
@@ -367,17 +376,10 @@ function normalizeConversation(input = {}) {
 
 function defaultModelSettings() {
   return {
-    version: 1,
-    provider: "openai-compatible",
-    preset: "",
-    presetLabel: "",
-    baseUrl: "",
-    apiKey: "",
+    version: 2,
+    connections: [],
+    defaultConnectionId: "",
     defaultModel: "",
-    models: [],
-    availableModels: [],
-    verified: false,
-    verifiedAt: "",
     updatedAt: ""
   };
 }
@@ -398,40 +400,105 @@ function inferModelPreset(settings = {}) {
   return Object.entries(modelPresetCatalog).find(([, item]) => item.model === model)?.[0] || "";
 }
 
+function modelConnectionId() {
+  return `model-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function migrateModelSettings(settings = {}) {
+  if (Number(settings.version) >= 2 && Array.isArray(settings.connections)) {
+    return { ...defaultModelSettings(), ...settings };
+  }
+  if (!settings.baseUrl && !settings.apiKey && !settings.defaultModel) return defaultModelSettings();
+  const id = String(settings.id || "model-migrated");
+  const connection = {
+    id,
+    owner: settings.owner || "personal",
+    provider: settings.provider || "openai-compatible",
+    preset: settings.preset || inferModelPreset(settings),
+    presetLabel: settings.presetLabel || "",
+    baseUrl: settings.baseUrl || "",
+    apiKey: settings.apiKey || "",
+    defaultModel: settings.defaultModel || "",
+    models: Array.isArray(settings.models) ? settings.models : [],
+    availableModels: Array.isArray(settings.availableModels) ? settings.availableModels : [],
+    verified: Boolean(settings.verified),
+    verifiedAt: settings.verifiedAt || "",
+    updatedAt: settings.updatedAt || ""
+  };
+  return {
+    version: 2,
+    connections: [connection],
+    defaultConnectionId: id,
+    defaultModel: connection.defaultModel,
+    updatedAt: settings.updatedAt || ""
+  };
+}
+
+function readModelSettings() {
+  return migrateModelSettings(readJsonFile(modelSettingsPath, defaultModelSettings()));
+}
+
 function sanitizeBaseUrl(value) {
   const url = new URL(String(value || "").trim());
   if (!["http:", "https:"].includes(url.protocol)) throw new Error("API 地址仅支持 http/https");
   return url.href.replace(/\/+$/, "");
 }
 
-function publicModelSettings(settings = readJsonFile(modelSettingsPath, defaultModelSettings())) {
-  const preset = settings.preset || inferModelPreset(settings);
+function publicModelConnection(connection = {}) {
+  const preset = connection.preset || inferModelPreset(connection);
   const presetDefinition = modelPresetCatalog[preset];
   return {
-    version: 1,
-    provider: settings.provider || "openai-compatible",
+    id: connection.id || "",
+    owner: connection.owner || "personal",
+    provider: connection.provider || "openai-compatible",
     preset,
-    presetLabel: settings.presetLabel || presetDefinition?.label || "",
-    baseUrl: settings.baseUrl || "",
-    hasApiKey: Boolean(settings.apiKey),
-    maskedKey: settings.apiKey ? `••••••••${settings.apiKey.slice(-4)}` : "",
-    defaultModel: settings.defaultModel || "",
-    models: Array.isArray(settings.models) ? settings.models : [],
-    availableModels: Array.isArray(settings.availableModels) ? settings.availableModels : [],
-    ready: Boolean(
-      settings.baseUrl
-      && settings.apiKey
-      && settings.defaultModel
-      && settings.verified
-      && Array.isArray(settings.availableModels)
-      && settings.availableModels.includes(settings.defaultModel)
-    ),
-    verifiedAt: settings.verifiedAt || "",
-    updatedAt: settings.updatedAt || ""
+    presetLabel: connection.presetLabel || presetDefinition?.label || "",
+    baseUrl: connection.baseUrl || "",
+    hasApiKey: Boolean(connection.apiKey),
+    maskedKey: connection.apiKey ? `••••••••${connection.apiKey.slice(-4)}` : "",
+    defaultModel: connection.defaultModel || "",
+    models: Array.isArray(connection.models) ? connection.models : [],
+    availableModels: Array.isArray(connection.availableModels) ? connection.availableModels : [],
+    ready: Boolean(connection.baseUrl && connection.apiKey && connection.verified),
+    verifiedAt: connection.verifiedAt || "",
+    updatedAt: connection.updatedAt || ""
   };
 }
 
-function normalizeModelSettings(input = {}, current = defaultModelSettings()) {
+function publicModelSettings(settings = readModelSettings()) {
+  const registry = migrateModelSettings(settings);
+  const connections = registry.connections.map(publicModelConnection);
+  const readyConnections = connections.filter((connection) => connection.ready);
+  const active = readyConnections.find((connection) => connection.id === registry.defaultConnectionId) || readyConnections[0] || connections[0] || {};
+  const modelOptions = readyConnections.flatMap((connection) => (
+    connection.availableModels.map((model) => ({
+      value: `${connection.id}::${model}`,
+      model,
+      connectionId: connection.id,
+      label: `${connection.presetLabel || connection.provider} / ${model}`
+    }))
+  ));
+  return {
+    version: 2,
+    connections,
+    modelOptions,
+    defaultConnectionId: active.id || "",
+    provider: active.provider || "openai-compatible",
+    preset: active.preset || "",
+    presetLabel: active.presetLabel || "",
+    baseUrl: active.baseUrl || "",
+    hasApiKey: Boolean(active.hasApiKey),
+    maskedKey: active.maskedKey || "",
+    defaultModel: active.defaultModel || "",
+    models: modelOptions.map((option) => option.value),
+    availableModels: modelOptions.map((option) => option.value),
+    ready: modelOptions.length > 0,
+    verifiedAt: active.verifiedAt || "",
+    updatedAt: registry.updatedAt || ""
+  };
+}
+
+function normalizeModelConnection(input = {}, current = {}) {
   const presetId = String(input.preset || current.preset || inferModelPreset(current)).trim();
   const preset = modelPresetCatalog[presetId];
   if (!preset) throw new Error("请选择有效的模型预设");
@@ -440,7 +507,8 @@ function normalizeModelSettings(input = {}, current = defaultModelSettings()) {
     : sanitizeBaseUrl(preset.baseUrl);
   const apiKey = input.apiKey === "" || input.apiKey === undefined ? current.apiKey : String(input.apiKey).trim();
   return {
-    version: 1,
+    id: String(input.connectionId || current.id || modelConnectionId()),
+    owner: input.owner === "platform" ? "platform" : (current.owner || "personal"),
     provider: "openai-compatible",
     preset: presetId,
     presetLabel: preset.label,
@@ -474,6 +542,18 @@ async function verifyModelSettings(settings) {
   };
 }
 
+function mergeModelConnection(registry, connection) {
+  const connections = registry.connections.filter((item) => item.id !== connection.id);
+  connections.push(connection);
+  return {
+    version: 2,
+    connections,
+    defaultConnectionId: String(registry.defaultConnectionId || connection.id),
+    defaultModel: String(registry.defaultModel || connection.defaultModel),
+    updatedAt: new Date().toISOString()
+  };
+}
+
 async function fetchProviderModels(settings) {
   if (!settings.baseUrl || !settings.apiKey) {
     throw new Error("请完整填写 API 地址和密钥");
@@ -497,18 +577,26 @@ async function fetchProviderModels(settings) {
 }
 
 async function callConfiguredModel(payload) {
-  const settings = readJsonFile(modelSettingsPath, defaultModelSettings());
-  if (!publicModelSettings(settings).ready) {
+  const registry = readModelSettings();
+  const publicSettings = publicModelSettings(registry);
+  if (!publicSettings.ready) {
     throw new Error("工作台模型不可用，请先接入 API/模型设置");
   }
   const messages = Array.isArray(payload.messages) ? payload.messages.slice(-20) : [];
   if (!messages.length) throw new Error("对话内容不能为空");
-  const configuredModels = new Set([
-    settings.defaultModel,
-    ...(Array.isArray(settings.models) ? settings.models : [])
-  ].filter(Boolean));
   const requestedModel = String(payload.model || "").trim();
-  const model = configuredModels.has(requestedModel) ? requestedModel : settings.defaultModel;
+  const [requestedConnectionId, requestedModelId] = requestedModel.includes("::")
+    ? requestedModel.split("::", 2)
+    : ["", requestedModel];
+  const readyConnections = registry.connections.filter((connection) => publicModelConnection(connection).ready);
+  const settings = readyConnections.find((connection) => (
+    connection.id === requestedConnectionId
+    && connection.availableModels.includes(requestedModelId)
+  )) || readyConnections.find((connection) => (
+    connection.availableModels.includes(requestedModelId)
+  )) || readyConnections.find((connection) => connection.id === registry.defaultConnectionId) || readyConnections[0];
+  if (!settings) throw new Error("所选模型连接不可用，请重新选择模型");
+  const model = settings.availableModels.includes(requestedModelId) ? requestedModelId : settings.defaultModel;
   const requestBody = {
     model,
     messages,
@@ -548,6 +636,16 @@ const server = http.createServer(async (req, res) => {
   const requestUrl = new URL(req.url || "/", `http://${host}:${port}`);
   if (req.method === "OPTIONS") {
     sendJson(res, 200, { ok: true });
+    return;
+  }
+  if (requestUrl.pathname === "/api/health") {
+    sendJson(res, 200, {
+      ok: true,
+      data: {
+        service: "clink-ai-api",
+        status: "ready"
+      }
+    });
     return;
   }
   if (requestUrl.pathname === "/api/import-link") {
@@ -606,8 +704,10 @@ const server = http.createServer(async (req, res) => {
           sendJson(res, 403, { ok: false, message: "仅管理员可修改模型配置" });
           return;
         }
-        const current = readJsonFile(modelSettingsPath, defaultModelSettings());
-        const settings = await verifyModelSettings(normalizeModelSettings(payload, current));
+        const registry = readModelSettings();
+        const current = registry.connections.find((item) => item.id === payload.connectionId) || {};
+        const connection = await verifyModelSettings(normalizeModelConnection(payload, current));
+        const settings = mergeModelConnection(registry, connection);
         writeJsonFile(modelSettingsPath, settings);
         recordRuntimeUsage({ apiRequests: 1 });
         sendJson(res, 200, { ok: true, data: publicModelSettings(settings) });
@@ -628,8 +728,10 @@ const server = http.createServer(async (req, res) => {
       const form = new URLSearchParams((await readRequestBody(req)) || "");
       const payload = JSON.parse(form.get("payload") || "{}");
       if (!requireAdmin(req, payload)) throw new Error("仅管理员可修改模型配置");
-      const current = readJsonFile(modelSettingsPath, defaultModelSettings());
-      const settings = await verifyModelSettings(normalizeModelSettings(payload, current));
+      const registry = readModelSettings();
+      const current = registry.connections.find((item) => item.id === payload.connectionId) || {};
+      const connection = await verifyModelSettings(normalizeModelConnection(payload, current));
+      const settings = mergeModelConnection(registry, connection);
       writeJsonFile(modelSettingsPath, settings);
       recordRuntimeUsage({ apiRequests: 1 });
       const result = JSON.stringify({ ok: true, data: publicModelSettings(settings) }).replace(/</g, "\\u003c");
@@ -649,9 +751,10 @@ const server = http.createServer(async (req, res) => {
       const form = new URLSearchParams((await readRequestBody(req)) || "");
       const payload = JSON.parse(form.get("payload") || "{}");
       if (!requireAdmin(req, payload)) throw new Error("仅管理员可检测模型");
-      const current = readJsonFile(modelSettingsPath, defaultModelSettings());
-      const settings = normalizeModelSettings(payload, current);
-      const models = await fetchProviderModels(settings);
+      const registry = readModelSettings();
+      const current = registry.connections.find((item) => item.id === payload.connectionId) || {};
+      const connection = normalizeModelConnection(payload, current);
+      const models = await fetchProviderModels(connection);
       const result = JSON.stringify({ ok: true, data: { models } }).replace(/</g, "\\u003c");
       sendHtml(res, 200, `<!doctype html><meta charset="utf-8"><script>parent.postMessage({type:"model-catalog-loaded",payload:${result}},location.origin)<\/script>`);
     } catch (error) {

@@ -4,9 +4,38 @@
 
 1. 安装依赖：`npm install`
 2. 启动预览：`npm run dev`
-3. 构建静态文件：`npm run build`
+3. 构建单文件发布产物：`npm run build:standalone`
 
-构建产物会生成在 `dist/`，可部署到 Vercel、GitHub Pages、Cloudflare Pages 或任意静态托管服务。
+构建产物会生成在 `outputs/`。只部署静态文件不能使用模型配置、智能体对话、运行统计和服务器数据存储。
+
+## 宝塔线上部署
+
+线上由两部分组成：
+
+1. Nginx 提供 `outputs/` 静态页面。
+2. PM2 运行 `scripts/preview-server.js`，Nginx 将 `/api/` 反向代理到 `127.0.0.1:8099`。
+
+首次部署：
+
+```bash
+npm install -g pm2
+cd /www/wwwroot/ai-terminal-kb-repo
+bash scripts/deploy-baota.sh
+```
+
+在宝塔的网站 Nginx 配置的 `server {}` 中加入 `deploy/nginx-api.conf` 的 `location` 内容，然后重载 Nginx。
+
+验证：
+
+```bash
+curl https://w-shawn.cn/api/health
+```
+
+应返回：
+
+```json
+{"ok":true,"data":{"service":"clink-ai-api","status":"ready"}}
+```
 
 ## 前端组件库口径
 

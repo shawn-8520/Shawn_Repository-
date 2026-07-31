@@ -1,28 +1,4 @@
 
-const tokens = {
-  admin: {
-    token: 'admin-token'
-  },
-  editor: {
-    token: 'editor-token'
-  }
-}
-
-const users = {
-  'admin-token': {
-    roles: ['admin'],
-    introduction: '知识库管理员',
-    avatar: 'https://wpimg.wallstcn.com/f778738c-e4f8-4870-b634-56703b4acafe.gif',
-    name: '管理员'
-  },
-  'editor-token': {
-    roles: ['editor'],
-    introduction: '知识库编辑者',
-    avatar: 'https://wpimg.wallstcn.com/f778738c-e4f8-4870-b634-56703b4acafe.gif',
-    name: '编辑者'
-  }
-}
-
 const MEMBERS_KEY = 'kb-admin-members'
 
 function loadMembers() {
@@ -65,15 +41,6 @@ module.exports = [
     type: 'post',
     response: config => {
       const { username, password } = config.body
-      const token = tokens[username]
-
-      if (token) {
-        return {
-          code: 20000,
-          data: token
-        }
-      }
-
       const member = findApprovedMember(username, password)
       if (!member) {
         return {
@@ -95,7 +62,7 @@ module.exports = [
     type: 'get',
     response: config => {
       const { token } = config.query
-      const info = users[token] || memberInfoFromToken(token)
+      const info = memberInfoFromToken(token)
 
       // mock error
       if (!info) {
