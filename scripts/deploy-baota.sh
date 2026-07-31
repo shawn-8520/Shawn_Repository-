@@ -18,16 +18,19 @@ git -C "$REPO_DIR" fetch origin "$BRANCH"
 git -C "$REPO_DIR" merge --ff-only "origin/$BRANCH"
 
 mkdir -p "$SITE_DIR"
-rsync -a --delete "$REPO_DIR/outputs/" "$SITE_DIR/"
-
-if ! command -v pm2 >/dev/null 2>&1; then
-  echo "PM2 is required. Install it in Baota first: npm install -g pm2"
-  exit 1
-fi
+rsync -a --delete --exclude=".user.ini" "$REPO_DIR/outputs/" "$SITE_DIR/"
 
 mkdir -p "$DATA_DIR"
-pm2 startOrReload "$REPO_DIR/deploy/ecosystem.config.cjs" --only "$APP_NAME"
-pm2 save
+
+if command -v pm2 >/dev/null 2>&1; then
+  pm2 startOrReload "$REPO_DIR/deploy/ecosystem.config.cjs" --only "$APP_NAME"
+  pm2 save
+elif systemctl list-unit-files "${APP_NAME}.service" >/dev/null 2>&1; then
+  systemctl restart "${APP_NAME}.service"
+else
+  echo "Neither PM2 nor ${APP_NAME}.service is available to manage the API process."
+  exit 1
+fi
 
 curl --fail --silent --show-error "http://127.0.0.1:8099/api/health" >/dev/null
 
