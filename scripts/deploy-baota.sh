@@ -32,7 +32,19 @@ else
   exit 1
 fi
 
-curl --fail --silent --show-error "http://127.0.0.1:8099/api/health" >/dev/null
+healthy=0
+for _ in {1..20}; do
+  if curl --fail --silent "http://127.0.0.1:8099/api/health" >/dev/null; then
+    healthy=1
+    break
+  fi
+  sleep 1
+done
+
+if [ "$healthy" -ne 1 ]; then
+  echo "Clink AI API did not become healthy within 20 seconds."
+  exit 1
+fi
 
 echo "Deployed outputs/ to $SITE_DIR"
 echo "Clink AI API is healthy on http://127.0.0.1:8099"
