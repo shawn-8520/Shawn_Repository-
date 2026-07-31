@@ -9,6 +9,8 @@
     "build:antd": "vite build --config vite.antd.config.js",
     "preview": "node scripts/preview-server.js",
     "build:standalone": "npm run build:antd && node scripts/build-standalone.js",
+    "check:changed": "node scripts/check-changed.js",
+    "health": "node scripts/project-health.js",
     "clean": "node scripts/clean-workspace.js",
     "clean:deep": "node scripts/clean-workspace.js --deep"
   },

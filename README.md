@@ -21,6 +21,8 @@
 - `content/`: 知识库 Markdown 内容
 - `data/`: 本地服务端运行数据，不提交密钥和用户数据
 - `scripts/`: 单文件构建、预览服务、部署和清理脚本
+- `scripts/standalone/`: 单文件页面的样式模板与客户端交互
+- `docs/`: 架构边界、开发链路与维护说明
 - `outputs/`: 可直接部署和预览的静态产物
 - `vendor/`: 引用的第三方开源项目源码，不保留其 `node_modules`
 - `backups/`: 本地备份，不纳入 Git
@@ -30,7 +32,13 @@
 ```bash
 npm run build:standalone
 npm run preview
+npm run check:changed
+npm run health
 ```
+
+详细代码分层见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)，开发与定向验证流程见 [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)。
+在其他电脑继续开发时，按 [`docs/ONBOARDING.md`](docs/ONBOARDING.md) 拉取并恢复环境；尚未部署服务器的改动记录在
+[`docs/RELEASE_NOTES_PENDING.md`](docs/RELEASE_NOTES_PENDING.md)。
 
 只清理可重新生成的构建缓存：
 

@@ -1,0 +1,6 @@
+node_modules/
+vendor/
+outputs/
+generated/
+backups/
+.npm-cache/
