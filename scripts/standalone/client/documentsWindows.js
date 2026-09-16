@@ -15,7 +15,7 @@ function renderAppCard(item, index = 0, total = 1) {
   const initialAngle = Math.PI / 2 + index / Math.max(1, total) * Math.PI * 2;
   const initialDepth = (Math.sin(initialAngle) + 1) / 2;
   const orbitStyle = "--orbit-x:" + (Math.cos(initialAngle) * 270).toFixed(2) + "px;--orbit-y:" + (Math.sin(initialAngle) * 90).toFixed(2) + "px;--orbit-z:" + (initialDepth * 160 - 70).toFixed(2) + "px;--orbit-scale:" + (0.72 + initialDepth * 0.28).toFixed(3) + ";--orbit-opacity:" + (0.52 + initialDepth * 0.48).toFixed(3) + ";--orbit-tilt:" + (Math.cos(initialAngle) * -16).toFixed(2) + "deg;--orbit-order:" + (120 + Math.round(initialDepth * 260));
-  return '<div class="app-card agent-card' + selected + '" role="button" tabindex="0" data-id="' + item.id + '" data-ext="' + escapeHtml(ext) + '" title="' + title + '" aria-label="' + title + '" aria-pressed="' + (selected ? "true" : "false") + '" ' + action + ' style="' + orbitStyle + '"><div class="agent-card-head"><span class="agent-avatar" aria-hidden="true">' + escapeHtml(agent.initials) + '</span><span class="agent-card-title"><strong>' + title + '</strong><small>' + escapeHtml(agent.role) + '</small></span></div><span class="agent-card-meta"><span class="agent-meta-row"><span>模型</span><span>' + escapeHtml(agentModelDisplayName(agent.model)) + '</span></span><span class="agent-meta-row"><span>知识库</span><span>' + escapeHtml(agent.knowledge) + '</span></span></span><span class="agent-tool-line">' + tools + '</span><button class="agent-chat-btn" type="button" data-id="' + escapeHtml(item.id) + '">打开对话</button></div>';
+  return '<div class="app-card agent-card' + selected + '" role="button" tabindex="0" data-id="' + item.id + '" data-ext="' + escapeHtml(ext) + '" title="' + title + '" aria-label="' + title + '" aria-pressed="' + (selected ? "true" : "false") + '" ' + action + ' style="' + orbitStyle + '"><div class="agent-card-head"><span class="agent-avatar" aria-hidden="true">' + escapeHtml(agent.initials) + '</span><span class="agent-card-title"><strong>' + title + '</strong><small>' + escapeHtml(agent.role) + '</small></span></div><span class="agent-card-meta"><span class="agent-meta-row"><span>模型</span><span>' + escapeHtml(agentModelDisplayName(effectiveAgentModelValue(agent.model))) + '</span></span><span class="agent-meta-row"><span>知识库</span><span>' + escapeHtml(agent.knowledge) + '</span></span></span><span class="agent-tool-line">' + tools + '</span><button class="agent-chat-btn" type="button" data-id="' + escapeHtml(item.id) + '">打开对话</button></div>';
 }
 
 function agentProfileFor(item) {
@@ -194,9 +194,13 @@ function openDesktopFolderWindow(folder) {
 
 function openAgentChatWindow(item) {
   const agent = normalizeAgentProfile(item.agent, item);
-  const model = resolveAgentModelValue(agent.model);
+  const model = resolveAgentModelValue(effectiveAgentModelValue(agent.model));
   if (!activeModelSettings.ready || !model || !agentModelOptions.includes(model)) {
-    window.dispatchEvent(new CustomEvent("workbench-model-required"));
+    if (typeof window.__WORKBENCH_SHOW_MODEL_NOTICE__ === "function") {
+      window.__WORKBENCH_SHOW_MODEL_NOTICE__();
+    } else {
+      window.dispatchEvent(new CustomEvent("workbench-model-required"));
+    }
     return;
   }
   window.dispatchEvent(new CustomEvent("workbench-open-agent-chat", {
@@ -229,7 +233,7 @@ function openHelpDocsWindow() {
   bar.innerHTML = "<i></i><i></i><i></i><span>帮助文档</span>";
   const body = document.createElement("div");
   body.className = "os-body help-docs-body";
-  body.innerHTML = '<h3>知识库项目帮助文档</h3><p>这里放置当前工作台最常用的操作说明，方便成员快速理解桌面、智能体、画板和后台入口。</p><ul class="help-docs-list"><li><b>登录与成员</b><span>未登录时只能看到登录与注册入口；注册申请会进入后台，由管理员同意或拒绝。</span></li><li><b>智能体工作台</b><span>左侧按分类筛选智能体，中间支持椭圆轮盘和平铺视图，右侧显示所选智能体详情。</span></li><li><b>无限画板</b><span>顶部“无限画板”入口可打开画布，用于卡片编排、图层管理和内容连接。</span></li><li><b>后台管理</b><span>管理员可进入后台管理成员、权限、注册申请和数据看板。</span></li><li><b>部署与数据</b><span>线上版本通过服务器保存项目数据，前端代码更新后需要重新发布到服务器。</span></li></ul>';
+  body.innerHTML = '<h3>知识库项目帮助文档</h3><p>这里放置当前工作台最常用的操作说明，方便成员快速理解桌面、智能体、画板和后台入口。</p><ul class="help-docs-list"><li><b>登录与成员</b><span>工作台仅限已批准账号进入；没有账号请先提交注册申请，等待管理员审核。</span></li><li><b>智能体工作台</b><span>左侧按分类筛选智能体，中间支持椭圆轮盘和平铺视图，右侧显示所选智能体详情。</span></li><li><b>无限画板</b><span>顶部“无限画板”入口可打开画布，用于卡片编排、图层管理和内容连接。</span></li><li><b>后台管理</b><span>管理员可进入后台管理成员、权限、注册申请和数据看板。</span></li><li><b>部署与数据</b><span>线上版本通过服务器保存项目数据，前端代码更新后需要重新发布到服务器。</span></li></ul>';
   win.appendChild(bar);
   win.appendChild(body);
   bar.querySelector("i").addEventListener("click", (event) => {
@@ -601,25 +605,43 @@ function openEditorWindow(item, mountTarget = desktopSurface, source = "desktop"
   const currentType = fileTypeFor(item || { path: "new.md" });
   const typeOptions = supportedFileTypes.map((type) => '<option value="' + type.value + '"' + (type.value === currentType ? " selected" : "") + '>' + type.label + ' (.' + type.value + ')</option>').join("");
   const win = document.createElement("div");
-  win.className = "os-window";
+  win.className = "os-window" + (source === "works" ? " works-editor-window" : "");
+  win.dataset.ownerTab = source === "works" ? "works" : currentTab();
+  win.setAttribute("role", "dialog");
+  win.setAttribute("aria-modal", "false");
+  win.setAttribute("aria-label", editing ? "编辑文件" : "添加文件");
   win.style.zIndex = ++winZ;
   openCount++;
   const bar = document.createElement("div");
   bar.className = "os-window-bar";
-  bar.innerHTML = "<i></i><i></i><i></i><span>" + (editing ? "Edit File" : "New File") + "</span>";
+  bar.innerHTML = '<button class="os-window-close" type="button" aria-label="关闭弹窗"></button><i></i><i></i><span>' + (source === "works" ? (editing ? "Edit File" : "New File") : (editing ? "编辑文件" : "添加文件")) + "</span>";
   const body = document.createElement("div");
   body.className = "os-body";
   body.dataset.createMode = "file";
   const canCreateFolder = !editing && source === "desktop";
   const createMode = canCreateFolder ? '<div class="create-mode"><button class="create-mode-btn active" data-create-mode="file" aria-pressed="true" type="button">文件</button><button class="create-mode-btn" data-create-mode="folder" aria-pressed="false" type="button">文件夹</button></div>' : "";
-  const linkImport = editing ? "" : '<div class="link-import-box file-only"><label>根据链接生成文件</label><div class="link-import-row"><input class="link-import-url" placeholder="粘贴文章链接 / 收藏链接"><button class="link-import-btn" type="button">生成</button></div><small class="link-import-status">会自动填写标题、简介，并把可读取内容整理成结构化文档。</small></div>';
-  body.innerHTML = createMode + linkImport + '<label style="display:block;font-weight:800;margin-bottom:8px">名称</label><input class="editor-title" style="width:100%;height:36px;border:1px solid #1a1a2e;border-radius:8px;padding:0 10px" value="' + escapeHtml(item?.label || "新建笔记") + '"><label class="file-only" style="display:block;font-weight:800;margin:14px 0 8px">格式</label><select class="editor-type file-only" style="width:100%;height:36px;border:1px solid #1a1a2e;border-radius:8px;padding:0 10px;background:white">' + typeOptions + '</select><label class="file-only" style="display:block;font-weight:800;margin:14px 0 8px">内容</label><textarea class="editor-content file-only" style="width:100%;height:220px;border:1px solid #1a1a2e;border-radius:8px;padding:10px;resize:vertical">' + escapeHtml(item?.content || docMap.get(normalizePath(item?.path || ""))?.content || defaultContentFor(currentType)) + '</textarea><button class="editor-save">保存</button>';
+  const linkImport = editing ? "" : '<section class="link-import-box file-only"><div class="link-import-heading"><b><span class="link-import-icon" aria-hidden="true">↗</span>根据链接生成文件</b></div><div class="link-import-row" style="display:flex;align-items:center;gap:10px"><input class="link-import-url" style="min-width:0;flex:1" type="url" inputmode="url" aria-label="文章或收藏链接" placeholder="粘贴文章链接 / 收藏链接"><button class="link-import-btn" style="width:112px;flex:0 0 112px" type="button">生成</button></div><small class="link-import-status" aria-live="polite">会自动填写标题、简介，并把可读取内容整理成结构化文档。</small></section>';
+  body.innerHTML = createMode + linkImport + '<div class="editor-form-grid"><label class="editor-field"><span>名称</span><input class="editor-title" value="' + escapeHtml(item?.label || "新建笔记") + '"></label><label class="editor-field file-only"><span>格式</span><select class="editor-type">' + typeOptions + '</select></label></div><label class="editor-field editor-content-field file-only"><span>内容</span><textarea class="editor-content" placeholder="输入文件内容">' + escapeHtml(item?.content || docMap.get(normalizePath(item?.path || ""))?.content || defaultContentFor(currentType)) + '</textarea></label><div class="editor-actions"><button class="editor-cancel" type="button">取消</button><button class="editor-save" type="button">保存文件</button></div>';
   win.appendChild(bar);
   win.appendChild(body);
-  bar.querySelector("i").addEventListener("click", (event) => {
-    event.stopPropagation();
+  let backdrop = null;
+  const onEditorKeydown = (event) => {
+    if (event.key === "Escape") closeEditor();
+  };
+  const onEditorTabChange = (event) => {
+    if (event.detail?.tab !== win.dataset.ownerTab) closeEditor();
+  };
+  const closeEditor = () => {
+    document.removeEventListener("keydown", onEditorKeydown);
+    window.removeEventListener("workbench-tab-change", onEditorTabChange);
+    backdrop?.remove();
     win.remove();
+  };
+  bar.querySelector(".os-window-close").addEventListener("click", (event) => {
+    event.stopPropagation();
+    closeEditor();
   });
+  body.querySelector(".editor-cancel").addEventListener("click", closeEditor);
   body.querySelectorAll(".create-mode-btn").forEach((button) => {
     button.addEventListener("click", () => {
       body.dataset.createMode = button.dataset.createMode || "file";
@@ -665,7 +687,7 @@ function openEditorWindow(item, mountTarget = desktopSurface, source = "desktop"
       saveDesktopItems();
       renderDesktopItems();
       renderWorksFiles();
-      win.remove();
+      closeEditor();
       return;
     }
     const fileType = normalizeFileType(body.querySelector(".editor-type").value);
@@ -700,10 +722,13 @@ function openEditorWindow(item, mountTarget = desktopSurface, source = "desktop"
     saveDesktopItems();
     renderDesktopItems();
     renderWorksFiles();
-    win.remove();
+    closeEditor();
   });
+  document.addEventListener("keydown", onEditorKeydown);
+  window.addEventListener("workbench-tab-change", onEditorTabChange);
   mountTarget.appendChild(win);
   centerWindow(win);
+  requestAnimationFrame(() => body.querySelector(editing ? ".editor-title" : ".link-import-url")?.focus());
 }
 
 function centerWindow(win) {

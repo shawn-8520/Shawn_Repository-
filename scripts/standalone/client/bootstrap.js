@@ -61,8 +61,13 @@ const statActiveAgentCount = document.getElementById("statActiveAgentCount");
 const statConversationCount = document.getElementById("statConversationCount");
 const statApiRequestCount = document.getElementById("statApiRequestCount");
 const statUserCount = document.getElementById("statUserCount");
+const statAgentTrend = document.getElementById("statAgentTrend");
+const statActiveAgentTrend = document.getElementById("statActiveAgentTrend");
+const statConversationTrend = document.getElementById("statConversationTrend");
+const statApiRequestTrend = document.getElementById("statApiRequestTrend");
+const statUserTrend = document.getElementById("statUserTrend");
 const transitionOverlay = document.getElementById("transitionOverlay");
-const tabs = ["home", "works", "system"];
+const tabs = ["home", "works", "system", "skills"];
 const PROJECT_STATE_ENDPOINT = "/api/project-state";
 const RUNTIME_STATS_ENDPOINT = "/api/runtime-stats";
 const ANNOUNCEMENTS_ENDPOINT = "/api/announcements";
@@ -98,7 +103,7 @@ let agentOrbitPaused = false;
 let agentOrbitDragging = false;
 let agentOrbitNeedsLayout = true;
 let desktopResizeFrame = 0;
-let agentDisplayMode = localStorage.getItem(AGENT_VIEW_MODE_KEY) === "grid" ? "grid" : "orbit";
+let agentDisplayMode = localStorage.getItem(AGENT_VIEW_MODE_KEY) === "orbit" ? "orbit" : "grid";
 let activeAgentCategory = "all";
 let agentStatusFilter = "all";
 let agentSortOrder = "newest";
@@ -111,6 +116,7 @@ let expandingToDesktop = false;
 let returnProgress = 0;
 let returnTargetRect = null;
 let desktopScale = 1;
+let authenticatedSession = null;
 const HIDDEN_WORKS_CATEGORIES_KEY = "aiTerminalHiddenWorksCategoriesV2";
 let desktopItems = loadDesktopItems();
 try {
@@ -156,13 +162,26 @@ function normalizeAgentModelValue(value) {
   return String(value || "").trim().replace(/^Open WebUI\\s*\\/\\s*/i, "");
 }
 
+function effectiveAgentModelValue(value) {
+  const assigned = normalizeAgentModelValue(value);
+  if (assigned) return assigned;
+  const fallback = normalizeAgentModelValue(activeModelSettings.defaultModel);
+  const matched = activeModelSettings.modelOptions.find((option) => (
+    normalizeAgentModelValue(option?.value) === fallback
+    || normalizeAgentModelValue(option?.model) === fallback
+  ));
+  return normalizeAgentModelValue(matched?.value || fallback);
+}
+
 async function requestProjectJson(endpoint, options = {}) {
   let response;
   try {
+    const authToken = getAdminTokenValue();
     response = await fetch(endpoint, {
       ...options,
       headers: {
         Accept: "application/json",
+        ...(authToken ? { "X-Token": authToken } : {}),
         ...(options.headers || {})
       }
     });
@@ -285,6 +304,7 @@ window.addEventListener("workbench-model-settings-updated", (event) => {
   applyPublicModelSettings(event.detail || {});
   renderDesktopItems();
 });
+window.addEventListener("workbench-runtime-refresh", refreshWorkbenchData);
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) refreshWorkbenchData();
 });
@@ -341,6 +361,27 @@ function relativeTime(value) {
   return Math.floor(seconds / 86400) + " 天前";
 }
 
+function applyStatTrend(element, comparison = {}, mode = "count") {
+  if (!element) return;
+  const current = Math.max(0, Number(comparison.current || 0));
+  const previous = Math.max(0, Number(comparison.previous || 0));
+  element.classList.remove("is-positive", "is-negative", "is-neutral");
+  if (!comparison.hasPrevious) {
+    element.classList.add("is-neutral");
+    element.innerHTML = "较昨日 <em>暂无数据</em>";
+    return;
+  }
+  const delta = current - previous;
+  let value = delta === 0 ? "0" : (delta > 0 ? "+" : "") + numberText(delta);
+  if (mode === "percent") {
+    value = previous > 0
+      ? ((delta > 0 ? "+" : "") + (delta / previous * 100).toFixed(1) + "%")
+      : (current > 0 ? "新增 " + numberText(current) : "0%");
+  }
+  element.classList.add(delta > 0 ? "is-positive" : delta < 0 ? "is-negative" : "is-neutral");
+  element.innerHTML = "较昨日 <em>" + value + "</em>";
+}
+
 function applyRuntimeStats(stats = {}) {
   const tokenQuota = 5000000;
   const modelQuota = 300000;
@@ -353,10 +394,16 @@ function applyRuntimeStats(stats = {}) {
   if (resourceModelProgress) resourceModelProgress.style.width = modelRate.toFixed(1) + "%";
   if (resourceModelPercent) resourceModelPercent.textContent = modelRate.toFixed(1) + "%";
   animateStatValue(statAgentCount, stats.agentCount, 0);
-  animateStatValue(statActiveAgentCount, visibleDesktopItems().filter((item) => normalizeAgentProfile(item.agent, item).status === "running" && !item.parentId).length, 80);
+  animateStatValue(statActiveAgentCount, stats.activeAgentCount, 80);
   animateStatValue(statConversationCount, stats.conversations, 160);
   animateStatValue(statApiRequestCount, stats.apiRequests, 240);
-  animateStatValue(statUserCount, 1, 320);
+  animateStatValue(statUserCount, stats.userCount, 320);
+  const comparisons = stats.comparisons || {};
+  applyStatTrend(statAgentTrend, comparisons.agentCount, "count");
+  applyStatTrend(statActiveAgentTrend, comparisons.activeAgentCount, "count");
+  applyStatTrend(statConversationTrend, comparisons.conversations, "percent");
+  applyStatTrend(statApiRequestTrend, comparisons.apiRequests, "percent");
+  applyStatTrend(statUserTrend, comparisons.userCount, "percent");
 }
 
 function renderAnnouncements(items = []) {
@@ -408,7 +455,8 @@ function applyPublicModelSettings(settings = {}) {
 async function refreshWorkbenchData() {
   if (!SERVER_STORAGE_ENABLED) return;
   const requests = [
-    fetch(RUNTIME_STATS_ENDPOINT).then((response) => response.json()).then((payload) => payload.ok && applyRuntimeStats(payload.data)),
+    refreshAuthenticatedSession(),
+    requestProjectJson(RUNTIME_STATS_ENDPOINT).then((payload) => applyRuntimeStats(payload.data)),
     fetch(ANNOUNCEMENTS_ENDPOINT).then((response) => response.json()).then((payload) => payload.ok && renderAnnouncements(payload.data)),
     requestProjectJson(MODEL_SETTINGS_ENDPOINT).then((payload) => {
       applyPublicModelSettings(payload.data);
@@ -537,13 +585,29 @@ function updateNavIndicator() {
   pillNav.style.setProperty("--nav-w", buttonRect.width + "px");
 }
 
+function syncCanvasProjectNav() {
+  const frame = document.querySelector("#page-system iframe");
+  let inCanvasProject = false;
+  try {
+    inCanvasProject = Boolean(frame && frame.contentWindow.location.hash.includes("/canvas/"));
+  } catch {}
+  pillNav.classList.toggle("hidden-during-intro", !authenticatedSession || (currentTab() === "system" && inCanvasProject));
+}
+
 function switchTab(tab) {
+  document.querySelectorAll(".os-window[data-owner-tab],.product-modal-backdrop[data-owner-tab]").forEach((element) => {
+    if (element.dataset.ownerTab !== tab) element.remove();
+  });
+  window.dispatchEvent(new CustomEvent("workbench-tab-change", { detail: { tab } }));
   tabs.forEach((name) => {
     document.getElementById("page-" + name).classList.toggle("active", name === tab);
   });
   pillNav.querySelectorAll("button").forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === tab);
   });
+  // 画布占满工作区时隐藏外层项目导航，离开后随 Tab 切换恢复。
+  pillNav.classList.toggle("hidden-during-intro", !authenticatedSession || tab === "system");
+  syncCanvasProjectNav();
   updateNavIndicator();
   requestAnimationFrame(updateNavIndicator);
   window.scrollTo(0, 0);
@@ -572,26 +636,36 @@ function finishIntro() {
   syncLaunchAuthState();
   updateNavIndicator();
   requestAnimationFrame(updateNavIndicator);
-  if (new URLSearchParams(location.search).get("launch") === "1" && hasAdminToken()) {
+  if (new URLSearchParams(location.search).get("launch") === "1" && authenticatedSession) {
     requestAnimationFrame(() => launch());
   }
 }
 
 function syncLaunchAuthState() {
-  const loggedIn = hasAdminToken();
+  const loggedIn = Boolean(authenticatedSession);
   heroCta.classList.toggle("visible", loggedIn);
   heroCta.classList.toggle("hidden", !loggedIn);
   heroAuthActions.hidden = false;
   heroAuthActions.classList.toggle("visible", !loggedIn && currentTab() === "home" && !launched);
-  pillNav.classList.toggle("hidden-during-intro", !loggedIn);
+  pillNav.classList.toggle("hidden-during-intro", !loggedIn || currentTab() === "system");
   syncAdminOnlyVisibility();
 }
 
-function startIntro() {
+async function startIntro() {
+  if (!hasAdminToken()) {
+    redirectToLoginBeforeDesktop();
+    return;
+  }
+  const session = await refreshAuthenticatedSession({ clearInvalid: true });
+  if (!session) {
+    redirectToLoginBeforeDesktop();
+    return;
+  }
   if (shouldAutoLaunchDesktop()) {
     directLaunchDesktop();
     return;
   }
+  document.documentElement.classList.remove("auto-launching");
   let delay = 0;
   terminalData.forEach((item) => {
     const line = renderIntroLine(item);
@@ -603,7 +677,7 @@ function startIntro() {
 }
 
 function shouldAutoLaunchDesktop() {
-  return new URLSearchParams(location.search).get("launch") === "1" && hasAdminToken() && currentTab() === "home";
+  return new URLSearchParams(location.search).get("launch") === "1" && Boolean(authenticatedSession) && currentTab() === "home";
 }
 
 function directLaunchDesktop() {
@@ -636,6 +710,7 @@ pillNav.addEventListener("click", (event) => {
 });
 
 window.addEventListener("hashchange", () => switchTab(currentTab()));
+setInterval(syncCanvasProjectNav, 500);
 window.addEventListener("resize", scheduleDesktopResize, { passive: true });
 document.addEventListener("wheel", (event) => {
   if (event.target.closest(".os-window")) {
@@ -778,21 +853,10 @@ window.addEventListener("workbench-agent-delete", (event) => {
   setDesktopSelection([itemId], false);
   deleteSelectedDesktopItems();
 });
-agentInsightTags.addEventListener("click", (event) => {
-  const button = event.target.closest("[data-agent-skill]");
-  if (!button) return;
-  const item = selectedAgentInsightItem();
-  if (!item) return;
-  const agent = normalizeAgentProfile(item.agent, item);
-  let selectedTools = [...agent.tools];
-  const skill = button.dataset.agentSkill;
-  if (selectedTools.includes(skill)) {
-    if (selectedTools.length === 1) return;
-    selectedTools = selectedTools.filter((tool) => tool !== skill);
-  } else {
-    selectedTools = [skill, ...selectedTools];
-  }
-  updateSelectedAgentInsight({ tools: selectedTools });
+window.addEventListener("workbench-agent-skills-change", (event) => {
+  const tools = Array.isArray(event.detail?.tools) ? event.detail.tools.filter(Boolean) : [];
+  if (!tools.length) return;
+  updateSelectedAgentInsight({ tools });
 });
 window.addEventListener("workbench-agent-category-create-request", () => openAgentCategoryDialog());
 window.addEventListener("workbench-agent-category-delete-request", (event) => {
@@ -1319,25 +1383,49 @@ function getAdminTokenValue() {
   return cookie ? decodeURIComponent(cookie.split("=").slice(1).join("=")) : localStorage.getItem("Admin-Token") || "";
 }
 
-function isAdminUser() {
-  const token = getAdminTokenValue();
-  if (token.startsWith("admin-token-v1.")) return true;
-  if (!token.startsWith("member-token-")) return false;
-  const account = decodeURIComponent(token.replace("member-token-", ""));
+function clearInvalidAuthState() {
+  document.cookie = "Admin-Token=; Max-Age=0; path=/";
+  localStorage.removeItem("Admin-Token");
+  authenticatedSession = null;
+  window.__WORKBENCH_AUTH_SESSION__ = null;
+  window.dispatchEvent(new CustomEvent("workbench-auth-session-sync", { detail: null }));
+  syncLaunchAuthState();
+}
+
+async function refreshAuthenticatedSession({ clearInvalid = false } = {}) {
+  if (!hasAdminToken()) {
+    authenticatedSession = null;
+    window.__WORKBENCH_AUTH_SESSION__ = null;
+    window.dispatchEvent(new CustomEvent("workbench-auth-session-sync", { detail: null }));
+    syncLaunchAuthState();
+    return null;
+  }
   try {
-    const members = JSON.parse(localStorage.getItem("kb-admin-members") || "[]");
-    return Array.isArray(members) && members.some((member) => (
-      member.account === account
-      && member.status === "启用"
-      && member.role === "管理员"
-    ));
+    const payload = await requestProjectJson("/api/auth/info");
+    if (payload?.code !== 20000 || !payload?.data?.role) {
+      if (clearInvalid || payload?.code === 50008) clearInvalidAuthState();
+      return null;
+    }
+    authenticatedSession = payload.data;
+    window.__WORKBENCH_AUTH_SESSION__ = authenticatedSession;
+    window.dispatchEvent(new CustomEvent("workbench-auth-session-sync", { detail: authenticatedSession }));
+    syncLaunchAuthState();
+    return authenticatedSession;
   } catch (error) {
-    return false;
+    authenticatedSession = null;
+    window.__WORKBENCH_AUTH_SESSION__ = null;
+    window.dispatchEvent(new CustomEvent("workbench-auth-session-sync", { detail: null }));
+    syncLaunchAuthState();
+    return null;
   }
 }
 
+function isAdminUser() {
+  return authenticatedSession?.role === "管理员";
+}
+
 function syncAdminOnlyVisibility() {
-  const loggedIn = hasAdminToken();
+  const loggedIn = Boolean(authenticatedSession);
   document.querySelectorAll("[data-admin-only]").forEach((node) => {
     node.classList.toggle("admin-only-hidden", !isAdminUser());
   });
@@ -1352,13 +1440,11 @@ function syncAdminOnlyVisibility() {
 function redirectToLoginBeforeDesktop() {
   const returnUrl = new URL(location.href);
   returnUrl.searchParams.set("launch", "1");
-  returnUrl.hash = "home";
-  location.href = "./admin/index.html#/login?redirect=" + encodeURIComponent(returnUrl.href);
+  location.replace("./admin/index.html#/login?redirect=" + encodeURIComponent(returnUrl.href) + "&notice=" + encodeURIComponent("没有账号不能进入，请先注册并等待管理员审核"));
 }
 
 function logoutFromDesktop() {
-  document.cookie = "Admin-Token=; Max-Age=0; path=/";
-  localStorage.removeItem("Admin-Token");
+  clearInvalidAuthState();
   launched = false;
   returningToIntro = false;
   expandingToDesktop = false;

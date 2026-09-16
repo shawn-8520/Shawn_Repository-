@@ -611,14 +611,9 @@ function selectedAgentInsightItem() {
 }
 
 function renderAgentInsightSkills(selectedTools) {
-  if (!agentInsightTags) return;
-  const selected = new Set(Array.isArray(selectedTools) ? selectedTools : []);
-  const skills = [...new Set([...selected, ...agentToolOptions].filter(Boolean))];
-  agentInsightTags.innerHTML = skills.map((skill) => {
-    const active = selected.has(skill);
-    const onlySelected = active && selected.size === 1;
-    return '<button type="button" data-agent-skill="' + escapeHtml(skill) + '" aria-pressed="' + String(active) + '"' + (onlySelected ? ' aria-label="' + escapeHtml(skill) + '，至少保留一个工具"' : "") + '>' + escapeHtml(skill) + '</button>';
-  }).join("");
+  window.dispatchEvent(new CustomEvent("workbench-agent-skills-sync", {
+    detail: { tools: Array.isArray(selectedTools) ? selectedTools : [] }
+  }));
 }
 
 function syncOpenAgentWindow(item) {
@@ -636,7 +631,7 @@ function syncOpenAgentWindow(item) {
     });
   }
   const summaryModel = win.querySelector(".agent-summary-model");
-    if (summaryModel) summaryModel.textContent = agentModelDisplayName(agent.model);
+    if (summaryModel) summaryModel.textContent = agentModelDisplayName(effectiveAgentModelValue(agent.model));
 }
 
 function updateSelectedAgentInsight(changes) {
@@ -687,7 +682,7 @@ function renderAgentDashboard(visibleItems, allItems) {
     const deadlineDay = String(12 + selectedIndex % 15).padStart(2, "0");
     if (agentInsightCode) agentInsightCode.dataset.itemId = selected.id;
     if (agentInsightTitle) agentInsightTitle.textContent = selected.label || "未命名智能体";
-    if (agentInsightDesc) agentInsightDesc.textContent = agent.role + "已连接 " + agentModelDisplayName(agent.model) + "，可调用 " + agent.tools.slice(0, 3).join("、") + "。";
+    if (agentInsightDesc) agentInsightDesc.textContent = agent.role + "已连接 " + agentModelDisplayName(effectiveAgentModelValue(agent.model)) + "，可调用 " + agent.tools.slice(0, 3).join("、") + "。";
     if (agentInsightCode) agentInsightCode.textContent = "AGT-2026-" + String(selectedIndex + 1).padStart(3, "0");
     if (agentInsightPriority) agentInsightPriority.textContent = priority;
     if (agentInsightOwner) agentInsightOwner.textContent = "当前登录成员";
@@ -703,7 +698,7 @@ function renderAgentDashboard(visibleItems, allItems) {
     window.__WORKBENCH_AGENT_CATEGORY__ = categoryPayload;
     window.dispatchEvent(new CustomEvent("workbench-agent-category-sync", { detail: categoryPayload }));
     const modelPayload = {
-      value: resolveAgentModelValue(agent.model),
+      value: resolveAgentModelValue(effectiveAgentModelValue(agent.model)),
       options: agentModelOptions.map((option) => ({
         value: option,
         label: agentModelDisplayName(option)

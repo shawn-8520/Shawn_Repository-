@@ -1,5 +1,7 @@
 # Clink AI 代码层级
 
+仓库级协作约束由根目录 `AGENTS.md` 定义，所有目录层级均遵守该规则。
+
 ## 一、业务层
 
 - `src/workbench-antd.jsx`：Ant Design v6 与 Ant Design X 工作台组件。
@@ -11,6 +13,7 @@
 
 ## 二、构建层
 
+- `scripts/project-map.js`：目录层级、检查文件和变更影响的机器可读单一来源。
 - `scripts/build-standalone.js`：发布产物入口，只负责读取内容、装配模板与写入文件。
 - `scripts/standalone/styles.js`：独立页面的样式模板。
 - `scripts/standalone/client.js`：独立页面客户端交互的装配入口。
@@ -23,6 +26,7 @@
 ## 三、服务层
 
 - `scripts/preview-server.js`：本地静态预览和项目 API。
+- `scripts/server/http-utils.js`：响应、请求体、环境变量和 MIME 等通用 HTTP 能力。
 - `data/`：本地服务运行数据；密钥不得写入仓库。
 
 ## 四、交付层
@@ -51,3 +55,4 @@
 2. 不直接修改 `vendor/` 来实现 Clink AI 业务需求；适配代码放在 `src/` 或构建层。
 3. `outputs/` 只由构建命令生成。
 4. 新增或修改的交互组件统一使用 Ant Design v6；智能体对话使用 Ant Design X。
+5. 新目录或新的构建影响关系先登记到 `scripts/project-map.js`，避免检查脚本和文档各自维护一套规则。

@@ -11,6 +11,12 @@ const outputPath = path.join(outputDir, "ai-terminal-kb.html");
 const indexOutputPath = path.join(outputDir, "index.html");
 const adminDistDir = path.join(root, "vendor", "vue-element-admin", "dist");
 const adminOutputDir = path.join(outputDir, "admin");
+const canvasDistDir = path.join(root, "vendor", "huobao-canvas", "dist");
+const canvasOutputDir = path.join(outputDir, "huobao-canvas");
+if (fs.existsSync(canvasDistDir)) {
+  fs.rmSync(canvasOutputDir, { recursive: true, force: true });
+  fs.cpSync(canvasDistDir, canvasOutputDir, { recursive: true });
+}
 const canvasEntryPath = path.join(outputDir, "huobao-canvas", "index.html");
 const canvasAssetVersion = fs.existsSync(canvasEntryPath)
   ? createHash("sha256").update(fs.readFileSync(canvasEntryPath)).digest("hex").slice(0, 12)
@@ -69,6 +75,7 @@ fs.mkdirSync(outputDir, { recursive: true });
 const html = renderHtml({ docs, navItems });
 fs.writeFileSync(outputPath, html, "utf8");
 fs.writeFileSync(indexOutputPath, html, "utf8");
+fs.copyFileSync(path.join(root, "assets", "ai-works-bg.png"), path.join(outputDir, "ai-works-bg.png"));
 syncAdminOutputs();
 console.log(outputPath);
 
@@ -133,6 +140,10 @@ function renderHtml({ docs, navItems }) {
     try {
       var autoLaunch = new URLSearchParams(location.search).get("launch") === "1";
       var hasToken = document.cookie.split(";").some(function(item) { return item.trim().startsWith("Admin-Token="); }) || localStorage.getItem("Admin-Token");
+      if (!hasToken) {
+        var returnUrl = new URL(location.href);
+        location.replace("./admin/index.html#/login?redirect=" + encodeURIComponent(returnUrl.href) + "&notice=" + encodeURIComponent("没有账号不能进入，请先注册并等待管理员审核"));
+      }
       if (autoLaunch && hasToken) document.documentElement.classList.add("auto-launching");
     } catch (error) {}
   </script>
@@ -150,13 +161,17 @@ function renderHtml({ docs, navItems }) {
       <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10.8 12 4l8 6.8V20a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z"/></svg>
       <span>主页</span>
     </button>
-    <button data-tab="works" aria-label="作品集">
+    <button data-tab="works" aria-label="AI速记">
       <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H10l2 2.2h5.5A2.5 2.5 0 0 1 20 8.7v8.8A2.5 2.5 0 0 1 17.5 20h-11A2.5 2.5 0 0 1 4 17.5z"/></svg>
-      <span>作品集</span>
+      <span>AI速记</span>
     </button>
-    <button data-tab="system" aria-label="我的OS">
+    <button data-tab="system" aria-label="无限画布">
       <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5A2.5 2.5 0 0 1 7.5 3h9A2.5 2.5 0 0 1 19 5.5v8A2.5 2.5 0 0 1 16.5 16h-9A2.5 2.5 0 0 1 5 13.5z"/><path d="M9 21h6M12 16v5"/></svg>
-      <span>我的OS</span>
+      <span>无限画布</span>
+    </button>
+    <button data-tab="skills" aria-label="工具 Skills">
+      <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.6 3.6a6.4 6.4 0 0 0 7.8 7.8l4.2 4.2a2.1 2.1 0 0 1-3 3l-4.2-4.2a6.4 6.4 0 0 0-7.8-7.8l3.1 3.1 2.7-2.7z"/></svg>
+      <span>工具 Skills</span>
     </button>
   </nav>
 
@@ -209,7 +224,6 @@ function renderHtml({ docs, navItems }) {
         <button data-command="cat life-system.md">Values</button>
         <button data-command="cat ai-partner.md">Now</button>
         <button id="homeCanvasBtn" type="button">无限画板</button>
-        <a class="topbar-admin-link" data-guest-only href="./login.html" target="_blank" rel="noopener">登录</a>
         <button class="topbar-admin-link topbar-logout-hidden" data-logged-in-only id="topbarLogoutBtn" type="button">退出登录</button>
         <a class="topbar-admin-link primary topbar-admin-bridge" id="topbarAdminBtn" data-admin-only href="./admin.html" target="_blank" rel="noopener" aria-hidden="true" tabindex="-1">后台</a>
         <div class="topbar-user-cluster">
@@ -240,31 +254,31 @@ function renderHtml({ docs, navItems }) {
             <article data-tone="blue">
               <small>智能体总数</small>
               <b id="statAgentCount">0</b>
-              <span>较昨日 <em>+3</em></span>
+              <span id="statAgentTrend">较昨日 <em>暂无数据</em></span>
               <i aria-hidden="true"><span id="statAgentIcon"></span></i>
             </article>
             <article data-tone="green">
               <small>活跃智能体</small>
               <b id="statActiveAgentCount">0</b>
-              <span>较昨日 <em>+5</em></span>
+              <span id="statActiveAgentTrend">较昨日 <em>暂无数据</em></span>
               <i aria-hidden="true"><span id="statActiveAgentIcon"></span></i>
             </article>
             <article data-tone="cyan">
               <small>今日对话数</small>
               <b id="statConversationCount">0</b>
-              <span>较昨日 <em>+18.6%</em></span>
+              <span id="statConversationTrend">较昨日 <em>暂无数据</em></span>
               <i aria-hidden="true"><span id="statConversationIcon"></span></i>
             </article>
             <article data-tone="orange">
               <small>今日调用量</small>
               <b id="statApiRequestCount">0</b>
-              <span>较昨日 <em>+21.3%</em></span>
+              <span id="statApiRequestTrend">较昨日 <em>暂无数据</em></span>
               <i aria-hidden="true"><span id="statApiCallIcon"></span></i>
             </article>
             <article data-tone="purple">
               <small>今日用户数</small>
               <b id="statUserCount">0</b>
-              <span>较昨日 <em>+9.4%</em></span>
+              <span id="statUserTrend">较昨日 <em>暂无数据</em></span>
               <i aria-hidden="true"><span id="statUserIcon"></span></i>
             </article>
           </div>
@@ -350,8 +364,8 @@ function renderHtml({ docs, navItems }) {
               <div><dt>当前状态</dt><dd class="agent-status" id="agentInsightStatus">运行中</dd></div>
             </dl>
             <div class="agent-insight-tags">
-              <b>该智能体挂载可使用的功能或 Skills</b>
-              <div id="agentInsightTags" role="group" aria-label="该智能体挂载可使用的功能或 Skills"></div>
+              <b>可调用工具 Skills</b>
+              <div id="agentInsightTags"></div>
             </div>
             <div class="agent-inline-advice">
               <b>AI 助手建议</b>
@@ -469,8 +483,8 @@ function renderHtml({ docs, navItems }) {
 
   <main class="tab-page" id="page-works">
     <section class="works-page">
-      <h1>1 Person + AI = 1 Team</h1>
-      <p>这里是作品集 / 知识库入口页。参考站的这个 tab 用来集中展示个人项目、内容系统、AI 协作工作流。</p>
+      <h1>链记成文</h1>
+      <p>链记成文，把AI速记中收藏的链接一键变成文档。AI自动解析文章、视频、播客等内容，提炼摘要与要点，生成结构化文档，并支持导出 Word、PDF、Markdown，让收藏真正变成可用的知识。</p>
       <div class="works-actions">
         <button id="worksAddFileBtn" class="works-add-file">添加文件</button>
       </div>
@@ -489,6 +503,12 @@ function renderHtml({ docs, navItems }) {
       <div class="system-canvas-panel">
         <iframe title="AI 无限画布" src="./huobao-canvas/index.html?v=${canvasAssetVersion}" loading="lazy" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
       </div>
+    </section>
+  </main>
+
+  <main class="tab-page" id="page-skills">
+    <section class="skills-page">
+      <div id="antdSkillsManager"></div>
     </section>
   </main>
 

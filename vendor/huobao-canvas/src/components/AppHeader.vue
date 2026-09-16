@@ -1,6 +1,6 @@
 <template>
   <!-- App Header | 应用头部 -->
-  <header class="flex items-center justify-between px-4 md:px-8 py-4 border-b border-[var(--border-color)]">
+  <header class="h-[48px] flex-none flex items-center justify-between px-4 md:px-8 border-b border-[var(--border-color)]">
     <!-- Left slot | 左侧插槽 -->
     <div class="flex items-center gap-2">
       <slot name="left">

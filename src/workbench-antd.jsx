@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Bubble, Conversations, Prompts, Sender, Welcome } from "@ant-design/x";
-import { Alert, App, Avatar, Button, ConfigProvider, Dropdown, Form, Input, InputNumber, Modal, Select, Slider, Space, Tag, message } from "antd";
-import { ApiOutlined, AppstoreOutlined, BarChartOutlined, BookOutlined, BulbOutlined, CommentOutlined, CompassOutlined, DashboardOutlined, DeleteOutlined, DownloadOutlined, DownOutlined, EditOutlined, FilePptOutlined, FolderOutlined, LogoutOutlined, MessageOutlined, MoreOutlined, NotificationOutlined, PaperClipOutlined, PlusOutlined, ProjectOutlined, ReadOutlined, RiseOutlined, RobotOutlined, SearchOutlined, SettingOutlined, StarOutlined, TagsOutlined, TeamOutlined, ThunderboltOutlined, UnorderedListOutlined, UserOutlined } from "@ant-design/icons";
+import { Alert, App, Avatar, Button, Checkbox, ConfigProvider, Descriptions, Dropdown, Empty, Form, Input, InputNumber, Modal, Select, Slider, Space, Switch, Tag, Tooltip, message } from "antd";
+import { ApiOutlined, AppstoreOutlined, BarChartOutlined, BookOutlined, BulbOutlined, CodeOutlined, CommentOutlined, CompassOutlined, DashboardOutlined, DeleteOutlined, DownloadOutlined, DownOutlined, EditOutlined, FilePptOutlined, FolderOutlined, GithubOutlined, GlobalOutlined, LogoutOutlined, MessageOutlined, MoreOutlined, NotificationOutlined, PaperClipOutlined, PlusOutlined, ProjectOutlined, ReadOutlined, RiseOutlined, RobotOutlined, SafetyCertificateOutlined, SearchOutlined, SettingOutlined, StarOutlined, TagsOutlined, TeamOutlined, ThunderboltOutlined, ToolOutlined, UnorderedListOutlined, UserOutlined } from "@ant-design/icons";
 import PptxGenJS from "pptxgenjs";
 import { modelPresets } from "./config/model-presets.js";
 
@@ -160,47 +160,77 @@ function SettingsModal({ open, onClose }) {
 function TopbarSettings() {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState("api");
+  const [session, setSession] = useState(window.__WORKBENCH_AUTH_SESSION__ || null);
   const show = (nextTab) => {
     setTab(nextTab);
     setOpen(true);
   };
   useEffect(() => {
     const openSettings = () => show("api");
+    const syncSession = (event) => setSession(event.detail || null);
+    const closeOnTabChange = (event) => {
+      if (event.detail?.tab !== "home") setOpen(false);
+    };
     window.addEventListener("workbench-open-model-settings", openSettings);
-    return () => window.removeEventListener("workbench-open-model-settings", openSettings);
+    window.addEventListener("workbench-auth-session-sync", syncSession);
+    window.addEventListener("workbench-tab-change", closeOnTabChange);
+    return () => {
+      window.removeEventListener("workbench-open-model-settings", openSettings);
+      window.removeEventListener("workbench-auth-session-sync", syncSession);
+      window.removeEventListener("workbench-tab-change", closeOnTabChange);
+    };
   }, []);
+  const canManageModels = ["管理员", "编辑者"].includes(session?.role);
+  const settingsHint = !session ? "请先登录后再修改 API/模型设置" : canManageModels ? "" : "仅管理员或编辑者可修改 API/模型设置";
   return (
     <>
-      <Button type="default" icon={<SettingOutlined />} onClick={() => show("api")}>
+      <Tooltip title={settingsHint}>
+        <Button type="default" icon={<SettingOutlined />} disabled={!canManageModels} onClick={() => show("api")}>
         API/模型设置
-      </Button>
+        </Button>
+      </Tooltip>
       <SettingsModal open={open} initialTab={tab} onClose={() => setOpen(false)} />
     </>
   );
 }
 
+function showModelAvailabilityNotice() {
+  if (typeof window.__WORKBENCH_SHOW_MODEL_NOTICE__ === "function") {
+    window.__WORKBENCH_SHOW_MODEL_NOTICE__();
+    return;
+  }
+  window.dispatchEvent(new CustomEvent("workbench-model-required"));
+}
+
+function sharedModelAuthHeaders() {
+  const cookie = document.cookie.split(";").map((item) => item.trim()).find((item) => item.startsWith("Admin-Token="));
+  const token = cookie ? decodeURIComponent(cookie.split("=").slice(1).join("=")) : localStorage.getItem("Admin-Token") || "";
+  return token ? { "X-Token": token } : {};
+}
+
 function ModelAvailabilityNotice() {
   const initial = window.__WORKBENCH_MODEL_AVAILABILITY__ || { ready: false };
-  const [state, setState] = useState(initial);
-  const [visible, setVisible] = useState(false);
+  const [visible, setVisible] = useState(!initial.ready);
   useEffect(() => {
     const sync = (event) => {
       const nextState = event.detail || { ready: false };
-      setState(nextState);
-      if (nextState.ready) setVisible(false);
+      setVisible(!nextState.ready);
     };
     const required = () => {
-      setState(window.__WORKBENCH_MODEL_AVAILABILITY__ || { ready: false });
       setVisible(true);
     };
+    window.__WORKBENCH_SHOW_MODEL_NOTICE__ = required;
     window.addEventListener("workbench-model-availability-sync", sync);
     window.addEventListener("workbench-model-required", required);
     return () => {
+      if (window.__WORKBENCH_SHOW_MODEL_NOTICE__ === required) {
+        delete window.__WORKBENCH_SHOW_MODEL_NOTICE__;
+      }
       window.removeEventListener("workbench-model-availability-sync", sync);
       window.removeEventListener("workbench-model-required", required);
     };
   }, []);
-  if (state.ready || !visible) return null;
+  if (!visible) return null;
   return (
     <Alert
       showIcon
@@ -248,7 +278,7 @@ function AgentDetailSelect({
       className="workbench-detail-select-guard"
       onMouseDownCapture={unavailable && notifyWhenEmpty ? (event) => {
         event.preventDefault();
-        window.dispatchEvent(new CustomEvent("workbench-model-required"));
+        showModelAvailabilityNotice();
       } : undefined}
     >
       <Select
@@ -335,7 +365,7 @@ function AgentFilters() {
 }
 
 function AgentViewSwitch() {
-  const [mode, setMode] = useState(window.__WORKBENCH_AGENT_VIEW_MODE__ || "orbit");
+  const [mode, setMode] = useState(window.__WORKBENCH_AGENT_VIEW_MODE__ || "grid");
   useEffect(() => {
     const sync = (event) => setMode(event.detail === "grid" ? "grid" : "orbit");
     window.addEventListener("workbench-agent-view-sync", sync);
@@ -348,20 +378,20 @@ function AgentViewSwitch() {
   return (
     <Space size={8}>
       <Button
-        className={mode === "orbit" ? "active" : ""}
+        className={mode === "grid" ? "active" : ""}
         icon={<AppstoreOutlined />}
-        aria-pressed={mode === "orbit"}
-        onClick={() => changeMode("orbit")}
+        aria-pressed={mode === "grid"}
+        onClick={() => changeMode("grid")}
       >
         卡片视图
       </Button>
       <Button
-        className={mode === "grid" ? "active" : ""}
-        icon={<UnorderedListOutlined />}
-        aria-pressed={mode === "grid"}
-        onClick={() => changeMode("grid")}
+        className={mode === "orbit" ? "active" : ""}
+        icon={<CompassOutlined />}
+        aria-pressed={mode === "orbit"}
+        onClick={() => changeMode("orbit")}
       >
-        列表视图
+        环绕视图
       </Button>
     </Space>
   );
@@ -413,11 +443,16 @@ function AgentInsightActions() {
       });
       setOpen(true);
     };
+    const closeOnTabChange = (event) => {
+      if (event.detail?.tab !== "home") setOpen(false);
+    };
     window.addEventListener("workbench-selected-agent-sync", sync);
     window.addEventListener("workbench-agent-create-open", openCreate);
+    window.addEventListener("workbench-tab-change", closeOnTabChange);
     return () => {
       window.removeEventListener("workbench-selected-agent-sync", sync);
       window.removeEventListener("workbench-agent-create-open", openCreate);
+      window.removeEventListener("workbench-tab-change", closeOnTabChange);
     };
   }, [agent, form]);
   const openEditor = () => {
@@ -831,7 +866,7 @@ function PptDeckBuilder({ open, agent, onClose }) {
     try {
       const response = await fetch("/api/agent-chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...sharedModelAuthHeaders() },
         body: JSON.stringify({
           model: agent?.model,
           messages: [
@@ -933,7 +968,7 @@ function AgentChatModal() {
       const availability = window.__WORKBENCH_MODEL_AVAILABILITY__ || { ready: false, models: [] };
       const availableModels = Array.isArray(availability.models) ? availability.models : [];
       if (!availability.ready || !nextAgent.model || !availableModels.includes(nextAgent.model)) {
-        window.dispatchEvent(new CustomEvent("workbench-model-required"));
+        showModelAvailabilityNotice();
         return;
       }
       setAgent(nextAgent);
@@ -956,8 +991,18 @@ function AgentChatModal() {
         message.error(error.message || "对话记录读取失败");
       }
     };
+    const closeOnTabChange = (event) => {
+      if (event.detail?.tab !== "home") {
+        setOpen(false);
+        setPptBuilderOpen(false);
+      }
+    };
     window.addEventListener("workbench-open-agent-chat", show);
-    return () => window.removeEventListener("workbench-open-agent-chat", show);
+    window.addEventListener("workbench-tab-change", closeOnTabChange);
+    return () => {
+      window.removeEventListener("workbench-open-agent-chat", show);
+      window.removeEventListener("workbench-tab-change", closeOnTabChange);
+    };
   }, []);
 
   const activeConversation = conversations.find((item) => item.id === activeKey);
@@ -988,7 +1033,7 @@ function AgentChatModal() {
     try {
       const response = await fetch("/api/agent-chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...sharedModelAuthHeaders() },
         body: JSON.stringify({
           model: agent.model,
           messages: [
@@ -1186,29 +1231,326 @@ function AgentChatModal() {
   );
 }
 
-function UserArea() {
-  const isAdmin = (() => {
-    const cookie = document.cookie
-      .split(";")
-      .map((item) => item.trim())
-      .find((item) => item.startsWith("Admin-Token="));
-    const token = cookie
-      ? decodeURIComponent(cookie.split("=").slice(1).join("="))
-      : localStorage.getItem("Admin-Token") || "";
-    if (token.startsWith("admin-token-v1.")) return true;
-    if (!token.startsWith("member-token-")) return false;
-    const account = decodeURIComponent(token.replace("member-token-", ""));
-    try {
-      const members = JSON.parse(localStorage.getItem("kb-admin-members") || "[]");
-      return Array.isArray(members) && members.some((member) => (
-        member.account === account
-        && member.status === "启用"
-        && member.role === "管理员"
-      ));
-    } catch (error) {
-      return false;
+const SKILLS_STORAGE_KEY = "clink-ai-skills-v1";
+const BUILTIN_SKILLS = [
+  { id: "rag-search", name: "RAG 检索", category: "知识处理", description: "检索已挂载知识库并返回带来源的上下文。", source: "Clink AI", version: "1.0.0", icon: "book", enabled: true, builtin: true },
+  { id: "document-editor", name: "文件编辑", category: "内容创作", description: "读取、整理与改写常用知识库文档。", source: "Clink AI", version: "1.0.0", icon: "edit", enabled: true, builtin: true },
+  { id: "ppt-builder", name: "PPT 生成", category: "内容创作", description: "生成演示文稿大纲、页面内容并导出 PPTX。", source: "Clink AI", version: "1.1.0", icon: "ppt", enabled: true, builtin: true },
+  { id: "data-analysis", name: "数据分析", category: "数据工具", description: "分析结构化数据并提炼趋势和结论。", source: "Clink AI", version: "1.0.0", icon: "chart", enabled: true, builtin: true },
+  { id: "web-reader", name: "网页读取", category: "网络工具", description: "读取公开网页内容并整理为结构化资料。", source: "Clink AI", version: "1.0.0", icon: "global", enabled: false, builtin: true },
+  { id: "code-helper", name: "代码说明", category: "开发工具", description: "解释代码、定位问题并生成修改建议。", source: "Clink AI", version: "1.0.0", icon: "code", enabled: true, builtin: true }
+];
+
+function readSkills() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(SKILLS_STORAGE_KEY) || "[]");
+    const state = new Map(Array.isArray(stored) ? stored.map((item) => [item.id, item]) : []);
+    return [
+      ...BUILTIN_SKILLS.map((item) => {
+        const saved = state.get(item.id);
+        return saved?.deleted ? null : { ...item, ...saved, builtin: true, deleted: false };
+      }),
+      ...(Array.isArray(stored) ? stored.filter((item) => !item.builtin && !item.deleted && !BUILTIN_SKILLS.some((preset) => preset.id === item.id)) : [])
+    ].filter(Boolean);
+  } catch (error) {
+    return BUILTIN_SKILLS;
+  }
+}
+
+function persistSkills(items) {
+  let deleted = [];
+  try {
+    const stored = JSON.parse(localStorage.getItem(SKILLS_STORAGE_KEY) || "[]");
+    deleted = Array.isArray(stored)
+      ? stored.filter((item) => item.deleted && !items.some((next) => next.id === item.id))
+      : [];
+  } catch (error) {
+    deleted = [];
+  }
+  localStorage.setItem(SKILLS_STORAGE_KEY, JSON.stringify([...items, ...deleted]));
+  window.dispatchEvent(new CustomEvent("skills-library-updated"));
+}
+
+function AgentSkillSelector() {
+  const [skills, setSkills] = useState(readSkills);
+  const [selected, setSelected] = useState(() => window.__WORKBENCH_SELECTED_AGENT__?.tools || []);
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("all");
+  const [status, setStatus] = useState("enabled");
+
+  useEffect(() => {
+    const syncLibrary = () => setSkills(readSkills());
+    const syncAgent = (event) => setSelected(Array.isArray(event.detail?.tools) ? event.detail.tools : []);
+    window.addEventListener("skills-library-updated", syncLibrary);
+    window.addEventListener("storage", syncLibrary);
+    window.addEventListener("workbench-selected-agent-sync", syncAgent);
+    return () => {
+      window.removeEventListener("skills-library-updated", syncLibrary);
+      window.removeEventListener("storage", syncLibrary);
+      window.removeEventListener("workbench-selected-agent-sync", syncAgent);
+    };
+  }, []);
+
+  const categories = [...new Set(skills.map((item) => item.category).filter(Boolean))];
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const visible = skills.filter((skill) => {
+    const matchesQuery = !normalizedQuery
+      || `${skill.name} ${skill.description} ${skill.category}`.toLocaleLowerCase().includes(normalizedQuery);
+    const matchesCategory = category === "all" || skill.category === category;
+    const matchesStatus = status === "all" || (status === "enabled") === Boolean(skill.enabled);
+    return matchesQuery && matchesCategory && matchesStatus;
+  });
+
+  const toggle = (skill, checked) => {
+    if (!skill.enabled) return;
+    const next = checked
+      ? [...new Set([...selected, skill.name])]
+      : selected.filter((name) => name !== skill.name);
+    if (!next.length) {
+      message.warning("请至少保留一个可调用 Skill");
+      return;
     }
-  })();
+    setSelected(next);
+    window.dispatchEvent(new CustomEvent("workbench-agent-skills-change", { detail: { tools: next } }));
+  };
+
+  return (
+    <div className="agent-skill-selector">
+      <Input
+        allowClear
+        size="small"
+        prefix={<SearchOutlined />}
+        placeholder="搜索可调用 Skills"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+      />
+      <div className="agent-skill-filters">
+        <Select
+          size="small"
+          value={category}
+          onChange={setCategory}
+          options={[{ value: "all", label: "全部分类" }, ...categories.map((item) => ({ value: item, label: item }))]}
+        />
+        <Select
+          size="small"
+          value={status}
+          onChange={setStatus}
+          options={[
+            { value: "all", label: "全部状态" },
+            { value: "enabled", label: "已启用" },
+            { value: "disabled", label: "已停用" }
+          ]}
+        />
+      </div>
+      <div className="agent-skill-options" role="group" aria-label="可调用工具 Skills">
+        {visible.length ? visible.map((skill) => (
+          <label className={`agent-skill-option${skill.enabled ? "" : " disabled"}`} key={skill.id}>
+            <Checkbox
+              checked={selected.includes(skill.name)}
+              disabled={!skill.enabled}
+              onChange={(event) => toggle(skill, event.target.checked)}
+            />
+            <span className="agent-skill-option-copy">
+              <b>{skill.name}</b>
+              <small>{skill.category}</small>
+            </span>
+            <Tag color={skill.enabled ? "processing" : "default"}>{skill.enabled ? "可调用" : "已停用"}</Tag>
+          </label>
+        )) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的 Skill" />}
+      </div>
+    </div>
+  );
+}
+
+function SkillIcon({ type }) {
+  const icons = {
+    book: <BookOutlined />, edit: <EditOutlined />, ppt: <FilePptOutlined />,
+    chart: <BarChartOutlined />, global: <GlobalOutlined />, code: <CodeOutlined />
+  };
+  return icons[type] || <ToolOutlined />;
+}
+
+function SkillsManager() {
+  const [skills, setSkills] = useState(readSkills);
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("all");
+  const [status, setStatus] = useState("all");
+  const [open, setOpen] = useState(false);
+  const [detailSkill, setDetailSkill] = useState(null);
+  const [editSkill, setEditSkill] = useState(null);
+  const [form] = Form.useForm();
+  const [editForm] = Form.useForm();
+  useEffect(() => {
+    const closeOnTabChange = (event) => {
+      if (event.detail?.tab !== "skills") {
+        setOpen(false);
+        setDetailSkill(null);
+        setEditSkill(null);
+      }
+    };
+    window.addEventListener("workbench-tab-change", closeOnTabChange);
+    return () => window.removeEventListener("workbench-tab-change", closeOnTabChange);
+  }, []);
+  const categories = [...new Set(skills.map((item) => item.category))];
+  const visible = skills.filter((item) => {
+    const text = `${item.name} ${item.description} ${item.source}`.toLowerCase();
+    return text.includes(query.trim().toLowerCase())
+      && (category === "all" || item.category === category)
+      && (status === "all" || (status === "enabled") === Boolean(item.enabled));
+  });
+  const update = (next) => {
+    setSkills(next);
+    persistSkills(next);
+  };
+  const addSkill = async () => {
+    const values = await form.validateFields();
+    const next = {
+      id: `custom-${Date.now()}`,
+      name: values.name.trim(),
+      category: values.category,
+      description: values.description.trim(),
+      source: values.repository.trim(),
+      repository: values.repository.trim(),
+      version: values.version?.trim() || "1.0.0",
+      icon: "tool",
+      enabled: true,
+      builtin: false
+    };
+    update([...skills, next]);
+    setOpen(false);
+    form.resetFields();
+    message.success("Skill 已添加");
+  };
+  const removeSkill = (skill) => {
+    Modal.confirm({
+      title: `删除 ${skill.name}？`,
+      content: "该 Skill 将从当前工作台移除，不会修改它的来源仓库。",
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      centered: true,
+      onOk: () => {
+        const next = skills.filter((item) => item.id !== skill.id);
+        setSkills(next);
+        persistSkills(skill.builtin ? [...next, { ...skill, deleted: true }] : next);
+        message.success("Skill 已删除");
+      }
+    });
+  };
+  const openEditor = (skill) => {
+    setEditSkill(skill);
+    editForm.setFieldsValue({
+      name: skill.name,
+      category: skill.category,
+      description: skill.description,
+      source: skill.repository || skill.source,
+      version: skill.version
+    });
+  };
+  const saveEdit = async () => {
+    const values = await editForm.validateFields();
+    const next = skills.map((item) => item.id === editSkill.id ? {
+      ...item,
+      name: values.name.trim(),
+      category: values.category,
+      description: values.description.trim(),
+      source: values.source.trim(),
+      repository: item.builtin ? item.repository : values.source.trim(),
+      version: values.version?.trim() || "1.0.0"
+    } : item);
+    update(next);
+    setEditSkill(null);
+    message.success("Skill 已更新");
+  };
+  return (
+    <div className="skills-manager-shell">
+      <header className="skills-manager-header">
+        <div>
+          <span className="skills-manager-kicker"><SafetyCertificateOutlined /> Agent Skills</span>
+          <h1>工具 Skills</h1>
+          <p>{skills.filter((item) => item.enabled).length} 个已启用 · {skills.length} 个已安装</p>
+        </div>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>从 GitHub 添加</Button>
+      </header>
+      <div className="skills-manager-toolbar">
+        <Input allowClear prefix={<SearchOutlined />} placeholder="搜索 Skills" value={query} onChange={(event) => setQuery(event.target.value)} />
+        <Select value={category} onChange={setCategory} options={[{ value: "all", label: "全部分类" }, ...categories.map((item) => ({ value: item, label: item }))]} />
+        <Select value={status} onChange={setStatus} options={[{ value: "all", label: "全部状态" }, { value: "enabled", label: "已启用" }, { value: "disabled", label: "已停用" }]} />
+      </div>
+      {visible.length ? (
+        <div className="skills-manager-grid">
+          {visible.map((skill) => (
+            <article className={`skills-manager-card${skill.enabled ? " enabled" : ""}`} key={skill.id} style={{ borderRadius: 12 }}>
+              <div className="skills-manager-card-top">
+                <span className="skills-manager-icon"><SkillIcon type={skill.icon} /></span>
+                <Switch checked={skill.enabled} onChange={(checked) => update(skills.map((item) => item.id === skill.id ? { ...item, enabled: checked } : item))} aria-label={`${skill.name}启用状态`} />
+              </div>
+              <div className="skills-manager-card-title">
+                <h2>{skill.name}</h2>
+                <Tag color={skill.builtin ? "blue" : "geekblue"}>{skill.builtin ? "内置" : "GitHub"}</Tag>
+              </div>
+              <p>{skill.description}</p>
+              <div className="skills-manager-meta"><span>{skill.category}</span><span>v{skill.version}</span></div>
+              <footer>
+                <Space className="skills-manager-actions" size={2}>
+                  <Button type="text" size="small" icon={<ReadOutlined />} onClick={() => setDetailSkill(skill)}>详情</Button>
+                  <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEditor(skill)}>编辑</Button>
+                  <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={() => removeSkill(skill)}>删除</Button>
+                </Space>
+              </footer>
+            </article>
+          ))}
+        </div>
+      ) : <Empty description="没有匹配的 Skill" />}
+      <Modal title="从 GitHub 添加 Skill" open={open} onOk={addSkill} onCancel={() => setOpen(false)} okText="添加" cancelText="取消" centered destroyOnHidden>
+        <Form form={form} layout="vertical" initialValues={{ category: "开发工具", version: "1.0.0" }}>
+          <Form.Item label="Skill 名称" name="name" rules={[{ required: true, message: "请输入 Skill 名称" }]}><Input placeholder="例如：网页摘要" /></Form.Item>
+          <Form.Item label="GitHub 仓库" name="repository" rules={[{ required: true, type: "url", message: "请输入有效的 GitHub 地址" }, { pattern: /^https:\/\/github\.com\//i, message: "目前仅支持 GitHub 仓库" }]}><Input prefix={<GithubOutlined />} placeholder="https://github.com/owner/repository" /></Form.Item>
+          <Form.Item label="分类" name="category" rules={[{ required: true }]}><Select options={[...categories, "知识处理", "内容创作", "数据工具", "网络工具", "开发工具"].filter((item, index, list) => list.indexOf(item) === index).map((item) => ({ value: item, label: item }))} /></Form.Item>
+          <Form.Item label="简介" name="description" rules={[{ required: true, message: "请输入简介" }]}><Input.TextArea rows={3} maxLength={120} showCount /></Form.Item>
+          <Form.Item label="版本" name="version"><Input /></Form.Item>
+        </Form>
+      </Modal>
+      <Modal title="Skill 详情" open={Boolean(detailSkill)} onCancel={() => setDetailSkill(null)} footer={<Button type="primary" onClick={() => setDetailSkill(null)}>关闭</Button>} centered destroyOnHidden>
+        {detailSkill && (
+          <div className="skills-detail">
+            <div className="skills-detail-heading">
+              <span className="skills-manager-icon"><SkillIcon type={detailSkill.icon} /></span>
+              <div><h2>{detailSkill.name}</h2><p>{detailSkill.description}</p></div>
+            </div>
+            <Descriptions column={1} bordered size="small" items={[
+              { key: "status", label: "状态", children: <Tag color={detailSkill.enabled ? "success" : "default"}>{detailSkill.enabled ? "已启用" : "已停用"}</Tag> },
+              { key: "category", label: "分类", children: detailSkill.category },
+              { key: "version", label: "版本", children: `v${detailSkill.version}` },
+              { key: "type", label: "类型", children: detailSkill.builtin ? "内置 Skill" : "GitHub Skill" },
+              { key: "source", label: "来源", children: detailSkill.source }
+            ]} />
+          </div>
+        )}
+      </Modal>
+      <Modal title="编辑 Skill" open={Boolean(editSkill)} onOk={saveEdit} onCancel={() => setEditSkill(null)} okText="保存" cancelText="取消" centered destroyOnHidden>
+        <Form form={editForm} layout="vertical">
+          <Form.Item label="Skill 名称" name="name" rules={[{ required: true, message: "请输入 Skill 名称" }]}><Input /></Form.Item>
+          <Form.Item label="分类" name="category" rules={[{ required: true, message: "请选择分类" }]}><Select showSearch options={[...categories, "知识处理", "内容创作", "数据工具", "网络工具", "开发工具"].filter((item, index, list) => list.indexOf(item) === index).map((item) => ({ value: item, label: item }))} /></Form.Item>
+          <Form.Item label="简介" name="description" rules={[{ required: true, message: "请输入简介" }]}><Input.TextArea rows={3} maxLength={120} showCount /></Form.Item>
+          <Form.Item label="来源 / GitHub 仓库" name="source" rules={[{ required: true, message: "请输入来源" }]}><Input prefix={editSkill?.builtin ? <ToolOutlined /> : <GithubOutlined />} /></Form.Item>
+          <Form.Item label="版本" name="version"><Input /></Form.Item>
+        </Form>
+      </Modal>
+    </div>
+  );
+}
+
+function UserArea() {
+  const [session, setSession] = useState(window.__WORKBENCH_AUTH_SESSION__ || null);
+
+  useEffect(() => {
+    const syncSession = (event) => setSession(event.detail || null);
+    window.addEventListener("workbench-auth-session-sync", syncSession);
+    return () => window.removeEventListener("workbench-auth-session-sync", syncSession);
+  }, []);
+
+  const isAdmin = session?.role === "管理员";
   const menu = {
     items: [
       { key: "profile", icon: <UserOutlined />, label: "当前登录成员" },
@@ -1225,7 +1567,7 @@ function UserArea() {
     <Dropdown menu={menu} trigger={["click"]}>
       <Button className="workbench-user-button" type="text">
         <Avatar size={28} icon={<UserOutlined />} />
-        <span>成员</span>
+        <span>{session?.role || "成员"}</span>
         <DownOutlined />
       </Button>
     </Dropdown>
@@ -1246,6 +1588,7 @@ mount("antdAgentViewSwitch", AgentViewSwitch);
 mount("antdAgentCategorySelect", AgentCategorySelect);
 mount("antdAgentModelSelect", AgentModelSelect);
 mount("antdAgentKnowledgeSelect", AgentKnowledgeSelect);
+mount("agentInsightTags", AgentSkillSelector);
 mount("antdAgentInsightActions", AgentInsightActions);
 mount("agentBoardList", AgentCategoryBoard);
 mount("antdAgentCategoryActions", AgentCategoryActions);
@@ -1256,3 +1599,4 @@ mount("statApiCallIcon", () => <StatIcon type="calls" />);
 mount("statUserIcon", () => <StatIcon type="users" />);
 mount("antdUserArea", UserArea);
 mount("antdAgentChat", AgentChatModal);
+mount("antdSkillsManager", SkillsManager);

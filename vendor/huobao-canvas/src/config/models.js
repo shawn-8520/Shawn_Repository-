@@ -48,6 +48,42 @@ export const BANANA_SIZE_OPTIONS = [
 // Image generation models | 图片生成模型
 export const IMAGE_MODELS = [
     {
+        label: 'FLUX（Pollinations 免费免密·带水印）',
+        key: 'pollinations/flux',
+        provider: ['chatfire'],
+        sizes: ['1024x1024', '1536x1024', '1024x1536'],
+        defaultParams: {
+            size: '1024x1024',
+            quality: 'standard',
+            style: 'vivid'
+        }
+    },
+    {
+        label: 'AI Horde SDXL（免费免注册·无水印）',
+        key: 'aihorde/sdxl-text2img',
+        provider: ['chatfire'],
+        sizes: ['512x512', '768x768', '1024x1024'],
+        defaultParams: { size: '512x512', quality: 'standard', style: 'vivid' }
+    },
+    {
+        label: 'Kontext（Pollinations 免费额度）',
+        key: 'pollinations/kontext',
+        provider: ['chatfire'],
+        sizes: ['1024x1024', '1536x1024', '1024x1536'],
+        defaultParams: {
+            size: '1024x1024',
+            quality: 'standard',
+            style: 'vivid'
+        }
+    },
+    {
+        label: 'AI Horde SDXL（免费免注册图生图）',
+        key: 'aihorde/sdxl-img2img',
+        provider: ['chatfire'],
+        sizes: ['512x512', '768x768', '1024x1024'],
+        defaultParams: { size: '512x512', quality: 'standard', style: 'vivid' }
+    },
+    {
         label: 'FLUX.1 Schnell（HF 免费额度）',
         key: 'black-forest-labs/FLUX.1-schnell',
         provider: ['huggingface'],

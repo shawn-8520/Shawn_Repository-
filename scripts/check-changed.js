@@ -2,44 +2,46 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
+import {
+  FULL_SYNTAX_CHECK_FILES,
+  affectedChecks,
+  normalizeChangedPath,
+} from "./project-map.js";
 
 const root = process.cwd();
 const npmCommand = process.platform === "win32" ? (process.env.ComSpec || "cmd.exe") : "npm";
 const npmPrefixArgs = process.platform === "win32" ? ["/d", "/s", "/c", "npm"] : [];
-const status = execFileSync("git", ["status", "--porcelain=v1"], { cwd: root, encoding: "utf8" });
+const fullCheck = process.argv.includes("--all");
+const status = execFileSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], {
+  cwd: root,
+  encoding: "utf8",
+});
 const changed = status
   .split(/\r?\n/)
   .filter(Boolean)
-  .map((line) => line.slice(3).split(" -> ").at(-1));
+  .map(normalizeChangedPath);
 
 const checks = [];
 const add = (label, command, args) => checks.push({ label, command, args });
-const touches = (pattern) => changed.some((file) => pattern.test(file));
-
-const syntaxFiles = [
-  "scripts/build-standalone.js",
-  "scripts/standalone/styles.js",
-  "scripts/standalone/client.js",
-  "scripts/standalone/client/bootstrap.js",
-  "scripts/standalone/client/desktopAgents.js",
-  "scripts/standalone/client/infiniteCanvas.js",
-  "scripts/standalone/client/documentsWindows.js",
-  "scripts/preview-server.js",
-  "scripts/project-health.js",
-  "scripts/check-changed.js",
-].filter((file) => fs.existsSync(path.join(root, file)));
+const impacted = fullCheck
+  ? ["antd", "standalone", "server", "tooling"]
+  : affectedChecks(changed).map((rule) => rule.id);
+const changedSyntaxFiles = changed.filter((file) => /^scripts\/.*\.js$/.test(file));
+const syntaxFiles = (fullCheck ? FULL_SYNTAX_CHECK_FILES : changedSyntaxFiles)
+  .filter((file, index, files) => files.indexOf(file) === index)
+  .filter((file) => fs.existsSync(path.join(root, file)));
 
 for (const file of syntaxFiles) add(`语法 ${file}`, process.execPath, ["--check", file]);
 
-if (touches(/^(src\/|vite\.antd\.config\.js$|package(?:-lock)?\.json$)/)) {
+if (impacted.includes("antd")) {
   add("Ant Design 工作台构建", npmCommand, [...npmPrefixArgs, "run", "build:antd"]);
 }
 
-if (touches(/^(content\/|assets\/|scripts\/build-standalone\.js$|scripts\/standalone\/|src\/|vite\.antd\.config\.js$)/)) {
+if (impacted.includes("standalone")) {
   add("单文件发布产物构建", process.execPath, ["scripts/build-standalone.js"]);
 }
 
-console.log(`变更文件 ${changed.length} 个，执行 ${checks.length} 项定向检查。`);
+console.log(`${fullCheck ? "完整检查" : "定向检查"}：变更文件 ${changed.length} 个，执行 ${checks.length} 项。`);
 for (const check of checks) {
   process.stdout.write(`- ${check.label} ... `);
   const result = spawnSync(check.command, check.args, { cwd: root, stdio: "pipe", encoding: "utf8" });
@@ -54,7 +56,7 @@ for (const check of checks) {
 }
 
 const standaloneOutput = path.join(root, "outputs", "ai-terminal-kb.html");
-if (fs.existsSync(standaloneOutput)) {
+if ((fullCheck || impacted.includes("standalone")) && fs.existsSync(standaloneOutput)) {
   const html = fs.readFileSync(standaloneOutput, "utf8");
   const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)];
   for (const [index, match] of scripts.entries()) {

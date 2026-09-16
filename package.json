@@ -1,6 +1,6 @@
 {
   "name": "ai-terminal-kb",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,6 +10,7 @@
     "preview": "node scripts/preview-server.js",
     "build:standalone": "npm run build:antd && node scripts/build-standalone.js",
     "check:changed": "node scripts/check-changed.js",
+    "check": "node scripts/check-changed.js --all",
     "health": "node scripts/project-health.js",
     "clean": "node scripts/clean-workspace.js",
     "clean:deep": "node scripts/clean-workspace.js --deep"

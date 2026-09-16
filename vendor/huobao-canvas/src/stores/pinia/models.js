@@ -250,9 +250,10 @@ export const useModelStore = defineStore('model', () => {
     }))
   ])
 
-  const allImageModels = computed(() => [
-    ...IMAGE_MODELS.map(m => ({ ...m, isCustom: false })),
-    ...customImageModels.value.map(m => ({
+  const allImageModels = computed(() => {
+    const models = [
+      ...IMAGE_MODELS.map(m => ({ ...m, isCustom: false })),
+      ...customImageModels.value.map(m => ({
       label: m.label || m.key,
       key: m.key,
       isCustom: true,
@@ -260,15 +261,17 @@ export const useModelStore = defineStore('model', () => {
       defaultParams: { quality: 'standard', style: 'vivid' }
     })),
     // 添加当前渠道的自定义模型
-    ...(customImageModelsByProvider.value[currentProvider.value] || []).map(m => ({
+      ...(customImageModelsByProvider.value[currentProvider.value] || []).map(m => ({
       label: m.label || m.key,
       key: m.key,
       isCustom: true,
       sizes: [],
       defaultParams: { quality: 'standard', style: 'vivid' },
       provider: [currentProvider.value]
-    }))
-  ])
+      }))
+    ]
+    return models.filter((model, index, list) => list.findIndex(item => item.key === model.key) === index)
+  })
 
   const allVideoModels = computed(() => [
     ...VIDEO_MODELS.map(m => ({ ...m, isCustom: false })),

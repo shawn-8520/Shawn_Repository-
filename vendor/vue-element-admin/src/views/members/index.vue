@@ -105,7 +105,6 @@
           <el-select v-model="form.role" style="width: 100%;">
             <el-option label="管理员" value="管理员" />
             <el-option label="编辑者" value="编辑者" />
-            <el-option label="访客" value="访客" />
           </el-select>
         </el-form-item>
         <el-form-item label="状态">
@@ -189,9 +188,9 @@ export default {
     loadMembers() {
       try {
         const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null')
-        return (Array.isArray(saved) ? saved : defaultMembers).map(normalizeMember)
+        return (Array.isArray(saved) ? saved : defaultMembers).map(normalizeMember).filter(member => member.role !== '访客')
       } catch (error) {
-        return defaultMembers.map(normalizeMember)
+        return defaultMembers.map(normalizeMember).filter(member => member.role !== '访客')
       }
     },
     persistMembers() {

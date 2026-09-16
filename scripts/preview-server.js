@@ -1,9 +1,16 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { modelPresets } from "../src/config/model-presets.js";
+import {
+  contentTypeFor,
+  loadPrivateEnv,
+  readRequestBody,
+  sendHtml,
+  sendJson,
+} from "./server/http-utils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "../outputs");
@@ -18,54 +25,15 @@ const runtimeStatsPath = path.join(dataDir, "runtime-stats.json");
 const announcementsPath = path.join(dataDir, "announcements.json");
 const modelSettingsPath = path.join(dataDir, "model-settings.json");
 const chatHistoryPath = path.join(dataDir, "chat-history.json");
+const membersPath = path.join(dataDir, "members.json");
+const registrationRequestsPath = path.join(dataDir, "registration-requests.json");
 const port = Number(process.env.PORT || 8099);
 const host = "127.0.0.1";
 const adminAccount = String(process.env.CLINK_ADMIN_ACCOUNT || "").trim();
 const adminPassword = String(process.env.CLINK_ADMIN_PASSWORD || "");
 const authSecret = String(process.env.CLINK_AUTH_SECRET || "");
 const authTokenLifetimeMs = 7 * 24 * 60 * 60 * 1000;
-
-const types = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".webp": "image/webp",
-  ".svg": "image/svg+xml"
-};
-
-function sendJson(res, status, payload) {
-  res.writeHead(status, {
-    "Content-Type": "application/json; charset=utf-8",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, X-Admin-Token"
-  });
-  res.end(JSON.stringify(payload));
-}
-
-function sendHtml(res, status, html) {
-  res.writeHead(status, {
-    "Content-Type": "text/html; charset=utf-8",
-    "Cache-Control": "no-store"
-  });
-  res.end(html);
-}
-
-function loadPrivateEnv(filePath) {
-  if (!fs.existsSync(filePath)) return;
-  const lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/);
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
-    const index = trimmed.indexOf("=");
-    const key = trimmed.slice(0, index).trim();
-    const value = trimmed.slice(index + 1).trim().replace(/^["']|["']$/g, "");
-    if (key && process.env[key] === undefined) process.env[key] = value;
-  }
-}
+const aiHordeJobs = new Map();
 
 function secureTextEqual(actual, expected) {
   const actualHash = createHash("sha256").update(String(actual)).digest();
@@ -103,10 +71,68 @@ function verifyAdminToken(token) {
   }
 }
 
+function hashPassword(password) {
+  const salt = randomBytes(16).toString("hex");
+  const hash = scryptSync(String(password), salt, 64).toString("hex");
+  return `scrypt$${salt}$${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  const [algorithm, salt, expectedHex] = String(stored || "").split("$");
+  if (algorithm !== "scrypt" || !salt || !expectedHex) return false;
+  try {
+    const actual = scryptSync(String(password), salt, 64);
+    const expected = Buffer.from(expectedHex, "hex");
+    return actual.length === expected.length && timingSafeEqual(actual, expected);
+  } catch {
+    return false;
+  }
+}
+
+function createMemberToken(member) {
+  const accountPart = Buffer.from(member.account, "utf8").toString("base64url");
+  const rolePart = Buffer.from(member.role, "utf8").toString("base64url");
+  const expiresAt = Date.now() + authTokenLifetimeMs;
+  const payload = `v1.${accountPart}.${rolePart}.${expiresAt}`;
+  const signature = createHmac("sha256", authSecret).update(payload).digest("base64url");
+  return `member-token-${payload}.${signature}`;
+}
+
+function verifyMemberToken(token) {
+  if (!authIsConfigured() || !String(token).startsWith("member-token-v1.")) return null;
+  const parts = String(token).slice("member-token-".length).split(".");
+  if (parts.length !== 5) return null;
+  const [version, accountPart, rolePart, expiresAtText, signature] = parts;
+  const expiresAt = Number(expiresAtText);
+  if (version !== "v1" || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) return null;
+  const expected = createHmac("sha256", authSecret)
+    .update(`${version}.${accountPart}.${rolePart}.${expiresAtText}`)
+    .digest("base64url");
+  if (!secureTextEqual(signature, expected)) return null;
+  try {
+    const account = Buffer.from(accountPart, "base64url").toString("utf8");
+    const role = Buffer.from(rolePart, "base64url").toString("utf8");
+    const member = readMembers().members.find((item) => item.account === account && item.status === "启用");
+    return member && member.role === role && ["管理员", "编辑者"].includes(member.role) ? member : null;
+  } catch {
+    return null;
+  }
+}
+
+function sessionFromToken(token) {
+  const admin = verifyAdminToken(token);
+  if (admin) return { account: admin, name: admin, role: "管理员", source: "environment" };
+  const member = verifyMemberToken(token);
+  return member ? { ...member, source: "member" } : null;
+}
+
 function tokenFromRequest(req, requestUrl, payload) {
+  const authorization = String(req.headers.authorization || "");
+  const bearerToken = authorization.toLowerCase().startsWith("bearer ") ? authorization.slice(7).trim() : "";
   return String(
     req.headers["x-token"]
     || req.headers["x-admin-token"]
+    || bearerToken
     || requestUrl?.searchParams.get("token")
     || payload?.adminToken
     || ""
@@ -236,24 +262,6 @@ async function importLink(url) {
   }
 }
 
-function readRequestBody(req, limit = 2 * 1024 * 1024) {
-  return new Promise((resolve, reject) => {
-    let size = 0;
-    let body = "";
-    req.on("data", (chunk) => {
-      size += chunk.length;
-      if (size > limit) {
-        reject(new Error("请求数据过大"));
-        req.destroy();
-        return;
-      }
-      body += chunk;
-    });
-    req.on("end", () => resolve(body));
-    req.on("error", reject);
-  });
-}
-
 function readProjectState() {
   if (!fs.existsSync(projectStatePath)) {
     return {
@@ -307,59 +315,244 @@ function writeJsonFile(filePath, value) {
   const tempPath = filePath + ".tmp";
   fs.writeFileSync(tempPath, JSON.stringify(value, null, 2), "utf8");
   fs.renameSync(tempPath, filePath);
-  if (filePath === modelSettingsPath) fs.chmodSync(filePath, 0o600);
+  if ([modelSettingsPath, membersPath, registrationRequestsPath].includes(filePath)) fs.chmodSync(filePath, 0o600);
+}
+
+function defaultMembers() {
+  return { version: 1, members: [], updatedAt: "" };
+}
+
+function readMembers() {
+  const data = readJsonFile(membersPath, defaultMembers());
+  return { ...defaultMembers(), ...data, members: Array.isArray(data.members) ? data.members : [] };
+}
+
+function writeMembers(members) {
+  writeJsonFile(membersPath, { version: 1, members, updatedAt: new Date().toISOString() });
+}
+
+function defaultRegistrationRequests() {
+  return { version: 1, requests: [], updatedAt: "" };
+}
+
+function readRegistrationRequests() {
+  const data = readJsonFile(registrationRequestsPath, defaultRegistrationRequests());
+  return { ...defaultRegistrationRequests(), ...data, requests: Array.isArray(data.requests) ? data.requests : [] };
+}
+
+function writeRegistrationRequests(requests) {
+  writeJsonFile(registrationRequestsPath, { version: 1, requests, updatedAt: new Date().toISOString() });
+}
+
+function validateAccount(value) {
+  const account = String(value || "").trim();
+  if (!/^[A-Za-z0-9_.-]{3,40}$/.test(account)) throw new Error("账号需为 3-40 位字母、数字、点、短横线或下划线");
+  return account;
+}
+
+function validatePassword(value, required = true) {
+  const password = String(value || "");
+  if (required && password.length < 6) throw new Error("密码至少需要 6 位");
+  if (password && password.length < 6) throw new Error("密码至少需要 6 位");
+  return password;
+}
+
+function publicMember(member) {
+  return {
+    id: member.id,
+    name: member.name,
+    account: member.account,
+    email: member.email,
+    role: member.role,
+    status: member.status,
+    lastActive: member.lastActive || "尚未登录",
+    createdAt: member.createdAt || "",
+    updatedAt: member.updatedAt || "",
+    passwordConfigured: Boolean(member.passwordHash)
+  };
+}
+
+function publicRegistrationRequest(request) {
+  return {
+    id: request.id,
+    name: request.name,
+    account: request.account,
+    email: request.email,
+    message: request.message,
+    role: request.role,
+    status: request.status,
+    createdAt: request.createdAt,
+    reviewedAt: request.reviewedAt || "",
+    passwordConfigured: Boolean(request.passwordHash)
+  };
+}
+
+function normalizeMemberInput(input = {}, current = null) {
+  const account = validateAccount(input.account ?? current?.account);
+  const password = validatePassword(input.password, !current);
+  const name = String(input.name ?? current?.name ?? "").trim().slice(0, 60);
+  const email = String(input.email ?? current?.email ?? "").trim().slice(0, 120);
+  if (!name || !email) throw new Error("请填写姓名和邮箱");
+  const role = ["管理员", "编辑者"].includes(input.role) ? input.role : (["管理员", "编辑者"].includes(current?.role) ? current.role : "编辑者");
+  const status = input.status === "停用" ? "停用" : "启用";
+  return {
+    id: current?.id || `member-${Date.now()}-${randomBytes(3).toString("hex")}`,
+    name,
+    account,
+    email,
+    role,
+    status,
+    passwordHash: password ? hashPassword(password) : current?.passwordHash,
+    lastActive: current?.lastActive || "尚未登录",
+    createdAt: current?.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
 }
 
 function requireAdmin(req, payload) {
-  const token = String(req.headers["x-admin-token"] || payload?.adminToken || "");
+  const token = tokenFromRequest(req, null, payload);
   const privateToken = String(process.env.CLINK_API_ADMIN_TOKEN || "");
   if (privateToken && token === privateToken) return true;
-  if (verifyAdminToken(token)) return true;
-  if (String(process.env.CLINK_ALLOW_LEGACY_MEMBER_TOKENS || "").toLowerCase() !== "true") return false;
-  if (!token.startsWith("member-token-")) return false;
-  const account = decodeURIComponent(token.replace("member-token-", ""));
-  const adminAccounts = String(process.env.CLINK_ADMIN_ACCOUNTS || "admin")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-  return adminAccounts.includes(account);
+  return sessionFromToken(token)?.role === "管理员";
+}
+
+function requireModelManager(req, payload) {
+  const token = tokenFromRequest(req, null, payload);
+  const privateToken = String(process.env.CLINK_API_ADMIN_TOKEN || "");
+  if (privateToken && token === privateToken) return true;
+  return ["管理员", "编辑者"].includes(sessionFromToken(token)?.role);
+}
+
+function requireAuthenticatedUser(req, payload) {
+  const token = tokenFromRequest(req, null, payload);
+  const privateToken = String(process.env.CLINK_API_ADMIN_TOKEN || "");
+  if (privateToken && token === privateToken) return { account: "system", role: "管理员" };
+  return sessionFromToken(token);
 }
 
 function defaultRuntimeStats() {
   return {
-    version: 1,
+    version: 2,
     apiRequests: 0,
     modelCalls: 0,
     tokenUsage: 0,
     conversations: 0,
+    daily: {},
+    snapshots: {},
     lastUpdatedAt: ""
   };
 }
 
+const statisticsTimeZone = String(process.env.CLINK_TIME_ZONE || "Asia/Shanghai");
+
+function statisticsDateKey(value = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: statisticsTimeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(value);
+}
+
+function previousStatisticsDateKey() {
+  return statisticsDateKey(new Date(Date.now() - 24 * 60 * 60 * 1000));
+}
+
+function normalizeRuntimeStats(value = {}) {
+  return {
+    ...defaultRuntimeStats(),
+    ...value,
+    version: 2,
+    daily: value.daily && typeof value.daily === "object" ? value.daily : {},
+    snapshots: value.snapshots && typeof value.snapshots === "object" ? value.snapshots : {}
+  };
+}
+
+function dailyRuntimeBucket(stats, dateKey = statisticsDateKey()) {
+  const existing = stats.daily[dateKey] || {};
+  const bucket = {
+    apiRequests: Math.max(0, Number(existing.apiRequests || 0)),
+    modelCalls: Math.max(0, Number(existing.modelCalls || 0)),
+    tokenUsage: Math.max(0, Number(existing.tokenUsage || 0)),
+    conversations: Math.max(0, Number(existing.conversations || 0)),
+    users: Array.isArray(existing.users) ? [...new Set(existing.users.map(String).filter(Boolean))] : []
+  };
+  stats.daily[dateKey] = bucket;
+  return bucket;
+}
+
+function pruneRuntimeHistory(stats, keepDays = 90) {
+  for (const collection of [stats.daily, stats.snapshots]) {
+    const keys = Object.keys(collection).sort().reverse();
+    for (const key of keys.slice(keepDays)) delete collection[key];
+  }
+}
+
 function recordRuntimeUsage(patch = {}) {
-  const current = readJsonFile(runtimeStatsPath, defaultRuntimeStats());
+  const current = normalizeRuntimeStats(readJsonFile(runtimeStatsPath, defaultRuntimeStats()));
+  const daily = dailyRuntimeBucket(current);
   for (const key of ["apiRequests", "modelCalls", "tokenUsage", "conversations"]) {
     const delta = Number(patch[key] || 0);
-    current[key] = Math.max(0, Number(current[key] || 0) + (Number.isFinite(delta) ? delta : 0));
+    const safeDelta = Number.isFinite(delta) ? delta : 0;
+    current[key] = Math.max(0, Number(current[key] || 0) + safeDelta);
+    daily[key] = Math.max(0, Number(daily[key] || 0) + safeDelta);
   }
   current.lastUpdatedAt = new Date().toISOString();
+  pruneRuntimeHistory(current);
   writeJsonFile(runtimeStatsPath, current);
   return current;
 }
 
+function recordRuntimeUser(account) {
+  const normalizedAccount = String(account || "").trim();
+  if (!normalizedAccount) return;
+  const current = normalizeRuntimeStats(readJsonFile(runtimeStatsPath, defaultRuntimeStats()));
+  const daily = dailyRuntimeBucket(current);
+  if (!daily.users.includes(normalizedAccount)) daily.users.push(normalizedAccount);
+  current.lastUpdatedAt = new Date().toISOString();
+  pruneRuntimeHistory(current);
+  writeJsonFile(runtimeStatsPath, current);
+}
+
 function projectStorageBytes() {
-  return [projectStatePath, runtimeStatsPath, announcementsPath, modelSettingsPath, chatHistoryPath]
+  return [projectStatePath, runtimeStatsPath, announcementsPath, modelSettingsPath, chatHistoryPath, membersPath, registrationRequestsPath]
     .reduce((total, filePath) => total + (fs.existsSync(filePath) ? fs.statSync(filePath).size : 0), 0);
 }
 
 function readRuntimeStats() {
-  const stats = readJsonFile(runtimeStatsPath, defaultRuntimeStats());
+  const stats = normalizeRuntimeStats(readJsonFile(runtimeStatsPath, defaultRuntimeStats()));
   const projectState = readProjectState();
+  const agents = Array.isArray(projectState.desktopItems)
+    ? projectState.desktopItems.filter((item) => !item.parentId)
+    : [];
+  const dateKey = statisticsDateKey();
+  const previousDateKey = previousStatisticsDateKey();
+  const daily = dailyRuntimeBucket(stats, dateKey);
+  const previousDaily = stats.daily[previousDateKey];
+  const snapshot = {
+    agentCount: agents.length,
+    activeAgentCount: agents.filter((item) => item?.agent?.status === "running").length,
+    userCount: daily.users.length
+  };
+  stats.snapshots[dateKey] = snapshot;
+  const previousSnapshot = stats.snapshots[previousDateKey];
+  const comparison = (current, previous, hasPrevious) => ({ current, previous: hasPrevious ? previous : 0, hasPrevious });
+  pruneRuntimeHistory(stats);
+  writeJsonFile(runtimeStatsPath, stats);
   return {
     ...stats,
-    agentCount: Array.isArray(projectState.desktopItems)
-      ? projectState.desktopItems.filter((item) => !item.parentId).length
-      : 0,
+    apiRequests: daily.apiRequests,
+    conversations: daily.conversations,
+    agentCount: snapshot.agentCount,
+    activeAgentCount: snapshot.activeAgentCount,
+    userCount: snapshot.userCount,
+    comparisons: {
+      agentCount: comparison(snapshot.agentCount, previousSnapshot?.agentCount, Boolean(previousSnapshot)),
+      activeAgentCount: comparison(snapshot.activeAgentCount, previousSnapshot?.activeAgentCount, Boolean(previousSnapshot)),
+      conversations: comparison(daily.conversations, previousDaily?.conversations, Boolean(previousDaily)),
+      apiRequests: comparison(daily.apiRequests, previousDaily?.apiRequests, Boolean(previousDaily)),
+      userCount: comparison(daily.users.length, previousDaily?.users?.length, Boolean(previousDaily))
+    },
     storageBytes: projectStorageBytes()
   };
 }
@@ -709,17 +902,30 @@ const server = http.createServer(async (req, res) => {
     }
     try {
       const payload = JSON.parse((await readRequestBody(req)) || "{}");
+      const username = String(payload.username || "").trim();
+      const password = String(payload.password || "");
       const valid = authIsConfigured()
-        && secureTextEqual(String(payload.username || "").trim(), adminAccount)
-        && secureTextEqual(String(payload.password || ""), adminPassword);
-      if (!valid) {
+        && secureTextEqual(username, adminAccount)
+        && secureTextEqual(password, adminPassword);
+      if (valid) {
+        recordRuntimeUser(adminAccount);
+        sendJson(res, 200, { code: 20000, data: { token: createAdminToken(adminAccount) } });
+        return;
+      }
+      const memberData = readMembers();
+      const member = memberData.members.find((item) => item.account === username && item.status === "启用" && item.role !== "访客");
+      if (!member || !verifyPassword(password, member.passwordHash)) {
         sendJson(res, 200, {
           code: 60204,
           message: authIsConfigured() ? "账号或密码错误" : "服务器尚未配置管理员账号"
         });
         return;
       }
-      sendJson(res, 200, { code: 20000, data: { token: createAdminToken(adminAccount) } });
+      member.lastActive = new Date().toISOString();
+      member.updatedAt = member.lastActive;
+      writeMembers(memberData.members);
+      recordRuntimeUser(member.account);
+      sendJson(res, 200, { code: 20000, data: { token: createMemberToken(member) } });
     } catch (error) {
       sendJson(res, 400, { code: 40000, message: error.message || "登录请求无效" });
     }
@@ -730,24 +936,159 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 405, { code: 40500, message: "Method Not Allowed" });
       return;
     }
-    const account = verifyAdminToken(tokenFromRequest(req, requestUrl));
-    if (!account) {
+    const session = sessionFromToken(tokenFromRequest(req, requestUrl));
+    if (!session) {
       sendJson(res, 200, { code: 50008, message: "登录已失效，请重新登录" });
       return;
     }
+    recordRuntimeUser(session.account);
     sendJson(res, 200, {
       code: 20000,
       data: {
-        roles: ["admin"],
-        introduction: "知识库管理员",
+        roles: [session.role === "管理员" ? "admin" : session.role === "编辑者" ? "editor" : "viewer"],
+        introduction: session.role === "管理员" ? "知识库管理员" : "知识库成员",
         avatar: "",
-        name: account
+        name: session.name || session.account,
+        account: session.account,
+        role: session.role
       }
     });
     return;
   }
   if (requestUrl.pathname === "/api/auth/logout") {
     sendJson(res, 200, { code: 20000, data: "success" });
+    return;
+  }
+  if (requestUrl.pathname === "/api/auth/register") {
+    if (req.method !== "POST") {
+      sendJson(res, 405, { code: 40500, message: "Method Not Allowed" });
+      return;
+    }
+    try {
+      const payload = JSON.parse((await readRequestBody(req)) || "{}");
+      const account = validateAccount(payload.account);
+      const password = validatePassword(payload.password);
+      const name = String(payload.name || "").trim().slice(0, 60);
+      const email = String(payload.email || "").trim().slice(0, 120);
+      const message = String(payload.message || "").trim().slice(0, 500);
+      if (!name || !email) throw new Error("请填写姓名和邮箱");
+      const memberData = readMembers();
+      if (memberData.members.some((item) => item.account === account)) throw new Error("该账号已存在");
+      const requestData = readRegistrationRequests();
+      if (requestData.requests.some((item) => item.account === account && item.status === "待审核")) {
+        throw new Error("该账号已有待审核申请");
+      }
+      const registration = {
+        id: `registration-${Date.now()}-${randomBytes(3).toString("hex")}`,
+        name,
+        account,
+        email,
+        message,
+        role: "编辑者",
+        status: "待审核",
+        passwordHash: hashPassword(password),
+        createdAt: new Date().toISOString(),
+        reviewedAt: ""
+      };
+      requestData.requests.unshift(registration);
+      writeRegistrationRequests(requestData.requests);
+      sendJson(res, 200, { code: 20000, data: publicRegistrationRequest(registration), message: "注册申请已提交，请等待管理员审核" });
+    } catch (error) {
+      sendJson(res, 200, { code: 40000, message: error.message || "注册申请提交失败" });
+    }
+    return;
+  }
+  if (requestUrl.pathname === "/api/admin/members" && req.method === "GET") {
+    if (!requireAdmin(req)) {
+      sendJson(res, 200, { code: 50003, message: "仅管理员可查看成员" });
+      return;
+    }
+    sendJson(res, 200, { code: 20000, data: readMembers().members.filter((member) => member.role !== "访客").map(publicMember) });
+    return;
+  }
+  if (requestUrl.pathname === "/api/admin/members" && req.method === "POST") {
+    try {
+      const payload = JSON.parse((await readRequestBody(req)) || "{}");
+      if (!requireAdmin(req, payload)) throw new Error("仅管理员可新增成员");
+      const data = readMembers();
+      const member = normalizeMemberInput(payload);
+      if (data.members.some((item) => item.account === member.account)) throw new Error("该账号已存在");
+      data.members.unshift(member);
+      writeMembers(data.members);
+      sendJson(res, 200, { code: 20000, data: publicMember(member), message: "成员创建成功" });
+    } catch (error) {
+      sendJson(res, 200, { code: 40000, message: error.message || "成员创建失败" });
+    }
+    return;
+  }
+  const memberRoute = requestUrl.pathname.match(/^\/api\/admin\/members\/([^/]+)$/);
+  if (memberRoute && ["PUT", "DELETE"].includes(req.method)) {
+    try {
+      const payload = req.method === "PUT" ? JSON.parse((await readRequestBody(req)) || "{}") : {};
+      if (!requireAdmin(req, payload)) throw new Error("仅管理员可管理成员");
+      const data = readMembers();
+      const index = data.members.findIndex((item) => item.id === decodeURIComponent(memberRoute[1]));
+      if (index < 0) throw new Error("成员不存在");
+      if (req.method === "DELETE") {
+        const [removed] = data.members.splice(index, 1);
+        writeMembers(data.members);
+        sendJson(res, 200, { code: 20000, data: publicMember(removed), message: "成员已删除" });
+      } else {
+        const updated = normalizeMemberInput(payload, data.members[index]);
+        if (data.members.some((item, itemIndex) => itemIndex !== index && item.account === updated.account)) throw new Error("该账号已存在");
+        data.members[index] = updated;
+        writeMembers(data.members);
+        sendJson(res, 200, { code: 20000, data: publicMember(updated), message: "成员已更新" });
+      }
+    } catch (error) {
+      sendJson(res, 200, { code: 40000, message: error.message || "成员操作失败" });
+    }
+    return;
+  }
+  if (requestUrl.pathname === "/api/admin/registrations" && req.method === "GET") {
+    if (!requireAdmin(req)) {
+      sendJson(res, 200, { code: 50003, message: "仅管理员可查看注册申请" });
+      return;
+    }
+    sendJson(res, 200, { code: 20000, data: readRegistrationRequests().requests.map(publicRegistrationRequest) });
+    return;
+  }
+  const registrationRoute = requestUrl.pathname.match(/^\/api\/admin\/registrations\/([^/]+)\/(approve|reject)$/);
+  if (registrationRoute && req.method === "POST") {
+    try {
+      const payload = JSON.parse((await readRequestBody(req)) || "{}");
+      if (!requireAdmin(req, payload)) throw new Error("仅管理员可审核注册申请");
+      const registrations = readRegistrationRequests();
+      const registration = registrations.requests.find((item) => item.id === decodeURIComponent(registrationRoute[1]));
+      if (!registration) throw new Error("注册申请不存在");
+      if (registration.status !== "待审核") throw new Error("该申请已处理");
+      if (registrationRoute[2] === "approve") {
+        const members = readMembers();
+        if (members.members.some((item) => item.account === registration.account)) throw new Error("该账号已存在");
+        const now = new Date().toISOString();
+        members.members.unshift({
+          id: `member-${Date.now()}-${randomBytes(3).toString("hex")}`,
+          name: registration.name,
+          account: registration.account,
+          email: registration.email,
+          role: ["管理员", "编辑者"].includes(payload.role) ? payload.role : "编辑者",
+          status: "启用",
+          passwordHash: registration.passwordHash,
+          lastActive: "尚未登录",
+          createdAt: now,
+          updatedAt: now
+        });
+        writeMembers(members.members);
+        registration.status = "已同意";
+      } else {
+        registration.status = "已拒绝";
+      }
+      registration.reviewedAt = new Date().toISOString();
+      writeRegistrationRequests(registrations.requests);
+      sendJson(res, 200, { code: 20000, data: publicRegistrationRequest(registration), message: registration.status });
+    } catch (error) {
+      sendJson(res, 200, { code: 40000, message: error.message || "审核失败" });
+    }
     return;
   }
   if (requestUrl.pathname === "/api/import-link") {
@@ -791,6 +1132,8 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 405, { ok: false, message: "Method Not Allowed" });
       return;
     }
+    const session = sessionFromToken(tokenFromRequest(req, requestUrl));
+    if (session) recordRuntimeUser(session.account);
     sendJson(res, 200, { ok: true, data: readRuntimeStats() });
     return;
   }
@@ -802,8 +1145,8 @@ const server = http.createServer(async (req, res) => {
       }
       if (req.method === "PUT" || req.method === "POST") {
         const payload = JSON.parse((await readRequestBody(req)) || "{}");
-        if (!requireAdmin(req, payload)) {
-          sendJson(res, 403, { ok: false, message: "仅管理员可修改模型配置" });
+        if (!requireModelManager(req, payload)) {
+          sendJson(res, 403, { ok: false, message: "仅管理员或编辑者可修改模型配置" });
           return;
         }
         const registry = readModelSettings();
@@ -829,7 +1172,7 @@ const server = http.createServer(async (req, res) => {
       }
       const form = new URLSearchParams((await readRequestBody(req)) || "");
       const payload = JSON.parse(form.get("payload") || "{}");
-      if (!requireAdmin(req, payload)) throw new Error("仅管理员可修改模型配置");
+      if (!requireModelManager(req, payload)) throw new Error("仅管理员或编辑者可修改模型配置");
       const registry = readModelSettings();
       const current = registry.connections.find((item) => item.id === payload.connectionId) || {};
       const connection = await verifyModelSettings(normalizeModelConnection(payload, current));
@@ -852,7 +1195,7 @@ const server = http.createServer(async (req, res) => {
       }
       const form = new URLSearchParams((await readRequestBody(req)) || "");
       const payload = JSON.parse(form.get("payload") || "{}");
-      if (!requireAdmin(req, payload)) throw new Error("仅管理员可检测模型");
+      if (!requireModelManager(req, payload)) throw new Error("仅管理员或编辑者可检测模型");
       const registry = readModelSettings();
       const current = registry.connections.find((item) => item.id === payload.connectionId) || {};
       const connection = normalizeModelConnection(payload, current);
@@ -872,10 +1215,176 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const payload = JSON.parse((await readRequestBody(req)) || "{}");
+      const session = requireAuthenticatedUser(req, payload);
+      if (!session) {
+        sendJson(res, 401, { ok: false, message: "请登录后使用管理员配置的共享模型" });
+        return;
+      }
       const data = await callConfiguredModel(payload);
       sendJson(res, 200, { ok: true, data });
     } catch (error) {
       sendJson(res, 400, { ok: false, message: error.message || "模型调用失败" });
+    }
+    return;
+  }
+  if (requestUrl.pathname === "/api/canvas-openai/v1/chat/completions") {
+    try {
+      if (req.method !== "POST") {
+        sendJson(res, 405, { ok: false, message: "Method Not Allowed" });
+        return;
+      }
+      const payload = JSON.parse((await readRequestBody(req)) || "{}");
+      const session = requireAuthenticatedUser(req, payload);
+      if (!session) {
+        sendJson(res, 401, { error: { message: "请登录后使用项目共享 API" } });
+        return;
+      }
+      const data = await callConfiguredModel(payload);
+      const responsePayload = {
+        id: `canvas-${Date.now()}`,
+        object: "chat.completion",
+        choices: [{ index: 0, message: { role: "assistant", content: data.text || "" }, finish_reason: "stop" }]
+      };
+      if (payload.stream) {
+        res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache" });
+        res.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: data.text || "" }, finish_reason: null }] })}\n\ndata: [DONE]\n\n`);
+      } else {
+        sendJson(res, 200, responsePayload);
+      }
+    } catch (error) {
+      sendJson(res, 400, { error: { message: error.message || "共享模型调用失败" } });
+    }
+    return;
+  }
+  const aiHordeJobMatch = requestUrl.pathname.match(/^\/api\/canvas-openai\/v1\/images\/jobs\/([^/]+)$/);
+  if (aiHordeJobMatch) {
+    try {
+      if (req.method !== "GET" && req.method !== "DELETE") {
+        sendJson(res, 405, { error: { message: "Method Not Allowed" } });
+        return;
+      }
+      const session = requireAuthenticatedUser(req);
+      if (!session) {
+        sendJson(res, 401, { error: { message: "请登录后查询图片任务" } });
+        return;
+      }
+      const jobId = decodeURIComponent(aiHordeJobMatch[1]);
+      // 任务状态由 AI Horde 保存；本地仅缓存归属，服务重启后仍允许凭任务 ID 查询。
+      const job = aiHordeJobs.get(jobId) || { account: session.account, prompt: "" };
+      if (job.account && job.account !== session.account) {
+        sendJson(res, 404, { error: { message: "图片任务不存在或已过期" } });
+        return;
+      }
+      if (req.method === "DELETE") {
+        const cancelResponse = await fetch(`https://aihorde.net/api/v2/generate/status/${encodeURIComponent(jobId)}`, {
+          method: "DELETE",
+          headers: { apikey: "0000000000" }
+        });
+        if (!cancelResponse.ok) throw new Error("取消 AI Horde 任务失败");
+        aiHordeJobs.delete(jobId);
+        sendJson(res, 200, { status: "cancelled", data: [] });
+        return;
+      }
+      const statusResponse = await fetch(`https://aihorde.net/api/v2/generate/status/${encodeURIComponent(jobId)}`);
+      const status = await statusResponse.json();
+      if (!statusResponse.ok) throw new Error(status.message || "AI Horde 状态查询失败");
+      if (status.generations?.[0]?.img) {
+        aiHordeJobs.delete(jobId);
+        sendJson(res, 200, { status: "completed", data: [{ url: status.generations[0].img, revised_prompt: job.prompt }] });
+        return;
+      }
+      if (status.faulted) {
+        aiHordeJobs.delete(jobId);
+        sendJson(res, 200, { status: "failed", message: status.message || "AI Horde 生成失败", data: [] });
+        return;
+      }
+      sendJson(res, 200, {
+        status: Number(status.processing || 0) > 0 ? "processing" : "queued",
+        queue_position: status.queue_position ?? null,
+        eta_seconds: status.wait_time ?? null,
+        data: []
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: { message: error.message || "图片任务查询失败" } });
+    }
+    return;
+  }
+  if (requestUrl.pathname === "/api/canvas-openai/v1/images/generations") {
+    try {
+      if (req.method !== "POST") {
+        sendJson(res, 405, { error: { message: "Method Not Allowed" } });
+        return;
+      }
+      const payload = JSON.parse((await readRequestBody(req)) || "{}");
+      const session = requireAuthenticatedUser(req, payload);
+      if (!session) {
+        sendJson(res, 401, { error: { message: "请登录后使用项目共享图片模型" } });
+        return;
+      }
+      const requestedModel = String(payload.model || "");
+      if (!["pollinations/flux", "pollinations/kontext", "aihorde/sdxl-text2img", "aihorde/sdxl-img2img"].includes(requestedModel)) {
+        sendJson(res, 400, { error: { message: "当前共享图片模型不支持该模型" } });
+        return;
+      }
+      const prompt = String(payload.prompt || "").trim();
+      if (!prompt) {
+        sendJson(res, 400, { error: { message: "图片提示词不能为空" } });
+        return;
+      }
+      const size = String(payload.size || "1024x1024").match(/^(\d{2,4})x(\d{2,4})$/);
+      const width = size ? Math.min(Number(size[1]), 1536) : 1024;
+      const height = size ? Math.min(Number(size[2]), 1536) : 1024;
+      const referenceImage = Array.isArray(payload.image) ? payload.image[0] : payload.image;
+      if (referenceImage && !/^https?:\/\//i.test(String(referenceImage)) && !/^data:image\//i.test(String(referenceImage))) {
+        sendJson(res, 400, { error: { message: "图生图参考图必须是可访问的图片 URL" } });
+        return;
+      }
+      if (requestedModel === "aihorde/sdxl-img2img" || requestedModel === "aihorde/sdxl-text2img") {
+        if (!referenceImage && requestedModel === "aihorde/sdxl-img2img") {
+          sendJson(res, 400, { error: { message: "AI Horde 图生图需要参考图" } });
+          return;
+        }
+        let sourceImage;
+        if (referenceImage && /^data:image\//i.test(String(referenceImage))) {
+          sourceImage = String(referenceImage).split(",", 2)[1] || "";
+        } else if (referenceImage) {
+          const sourceResponse = await fetch(String(referenceImage));
+          if (!sourceResponse.ok) throw new Error(`参考图无法读取（HTTP ${sourceResponse.status}）`);
+          const sourceBuffer = Buffer.from(await sourceResponse.arrayBuffer());
+          sourceImage = sourceBuffer.toString("base64");
+        }
+        if (referenceImage && !sourceImage) throw new Error("参考图内容为空");
+        const [width, height] = [Math.min(1024, Number(size?.[1] || 512)), Math.min(1024, Number(size?.[2] || 512))];
+        const hordeParams = { width, height, steps: 20, n: 1 };
+        if (sourceImage) {
+          hordeParams.denoising_strength = 0.7;
+          hordeParams.source_image = sourceImage;
+          hordeParams.source_processing = "img2img";
+        }
+        const hordeResponse = await fetch("https://aihorde.net/api/v2/generate/async", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", apikey: "0000000000" },
+          body: JSON.stringify({ prompt, models: ["AlbedoBase XL (SDXL)"], params: hordeParams, nsfw: false, censor_nsfw: true })
+        });
+        const hordeJob = await hordeResponse.json();
+        if (!hordeResponse.ok || !hordeJob.id) throw new Error(hordeJob.message || "AI Horde 请求失败");
+        aiHordeJobs.set(String(hordeJob.id), { account: session.account, createdAt: Date.now(), prompt });
+        sendJson(res, 200, {
+          status: "queued",
+          job_id: String(hordeJob.id),
+          queue_position: hordeJob.queue_position ?? null,
+          eta_seconds: hordeJob.wait_time ?? null,
+          data: []
+        });
+        return;
+      }
+      const model = "flux";
+      const imageParam = referenceImage ? `&image=${encodeURIComponent(String(referenceImage))}` : "";
+      const negativePrompt = "watermark, logo, signature, text, caption, username, brand mark";
+      const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=${width}&height=${height}&nologo=true&enhance=false&negative_prompt=${encodeURIComponent(negativePrompt)}&model=${model}${imageParam}`;
+      sendJson(res, 200, { created: Math.floor(Date.now() / 1000), data: [{ url: imageUrl, revised_prompt: prompt }] });
+    } catch (error) {
+      sendJson(res, 400, { error: { message: error.message || "免费图片模型调用失败" } });
     }
     return;
   }
@@ -976,7 +1485,7 @@ const server = http.createServer(async (req, res) => {
       res.end("Not found");
       return;
     }
-    res.writeHead(200, { "Content-Type": types[path.extname(file)] || "application/octet-stream" });
+    res.writeHead(200, { "Content-Type": contentTypeFor(file) });
     res.end(data);
   });
 });

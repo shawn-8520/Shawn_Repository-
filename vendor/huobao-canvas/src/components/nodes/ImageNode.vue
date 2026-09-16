@@ -116,7 +116,17 @@
             <img src="../../assets/loading.webp" alt="Loading" class="w-14 h-12" />
           </div>
 
-          <span class="text-sm text-white font-medium relative z-10">创作中</span>
+          <div class="text-sm text-white font-medium relative z-10 text-center">
+            <div>{{ progressStatusText(data.progress?.status) }}</div>
+            <template v-if="isRetryStatus(data.progress?.status)">
+              <div class="text-xs mt-1">重试次数：第 {{ data.progress?.retryAttempt || 1 }} 次</div>
+              <div class="text-xs mt-0.5">下次重试：{{ formatRetryTime(data.progress?.retryInSeconds) }}</div>
+            </template>
+            <template v-else-if="showsQueueDetails(data.progress?.status)">
+              <div class="text-xs mt-1">排队人数：{{ data.progress?.queuePosition != null ? `前方 ${data.progress.queuePosition} 名` : data.progress?.status === 'queueing' ? '查询中' : '队列暂未返回' }}</div>
+              <div class="text-xs mt-0.5">预计等待：{{ data.progress?.etaSeconds != null ? formatEta(data.progress.etaSeconds) : data.progress?.status === 'queueing' ? '计算中' : '队列暂未返回' }}</div>
+            </template>
+          </div>
         </div>
 
         <!-- Error state | 错误状态 -->
@@ -333,6 +343,25 @@ const props = defineProps({
   id: String,
   data: Object
 })
+
+const progressStatusText = (status) => ({
+  processing: '正在生成图片',
+  submitting: '正在提交任务',
+  retrying: '服务繁忙，正在等待重试',
+  reconnecting: '正在等待队列响应',
+  queueing: '正在获取排队信息'
+}[status] || '正在排队')
+
+const isRetryStatus = (status) => status === 'retrying' || status === 'reconnecting'
+const showsQueueDetails = (status) => status === 'queueing' || status === 'queued' || status === 'processing'
+const formatRetryTime = (seconds) => `${Math.max(1, Math.ceil(Number(seconds) || 1))} 秒后`
+
+const formatEta = (seconds) => {
+  const value = Number(seconds)
+  if (!Number.isFinite(value) || value < 1) return '不到 1 分钟'
+  if (value < 60) return `约 ${Math.ceil(value)} 秒`
+  return `约 ${Math.ceil(value / 60)} 分钟`
+}
 
 // Vue Flow instance | Vue Flow 实例
 const { updateNodeInternals } = useVueFlow()
@@ -810,6 +839,9 @@ const cancelEditLabel = () => {
 
 // Handle delete | 处理删除
 const handleDelete = () => {
+  if (props.data?.jobId) {
+    fetch(`/api/canvas-openai/v1/images/jobs/${encodeURIComponent(props.data.jobId)}`, { method: 'DELETE' }).catch(() => {})
+  }
   removeNode(props.id)
 }
 

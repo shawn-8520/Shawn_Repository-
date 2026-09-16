@@ -6,6 +6,7 @@
 import { ref, reactive, onUnmounted } from 'vue'
 import {
   generateImage,
+  getImageJobStatus,
   createVideoTask,
   getVideoTaskStatus,
   streamChatCompletions
@@ -149,12 +150,27 @@ export const useChat = (options = {}) => {
  * Simplified for open source - fixed input/output format
  */
 export const useImageGeneration = () => {
-  const { loading, error, status, reset, setLoading, setError, setSuccess } = useApiState()
+  const { loading, error, status, reset: resetState, setLoading, setError, setSuccess } = useApiState()
   const { adaptRequest, adaptResponse } = useProvider()
   const modelStore = useModelStore()
 
   const images = ref([])
   const currentImage = ref(null)
+  const generationProgress = ref(null)
+
+  const waitWithProgress = async (seconds, status = 'retrying', retryAttempt = null) => {
+    for (let remaining = seconds; remaining > 0; remaining -= 1) {
+      generationProgress.value = {
+        ...(generationProgress.value || {}),
+        status,
+        queue_position: null,
+        eta_seconds: null,
+        retry_attempt: retryAttempt,
+        retry_in_seconds: remaining
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000))
+    }
+  }
 
   /**
    * Generate image with fixed params | 固定参数生成图片
@@ -162,6 +178,12 @@ export const useImageGeneration = () => {
    */
   const generate = async (params) => {
     setLoading(true)
+    generationProgress.value = {
+      status: params.model === 'aihorde/sdxl-img2img' || params.model === 'aihorde/sdxl-text2img' ? 'queueing' : 'submitting',
+      queue_position: null,
+      eta_seconds: null,
+      job_id: null
+    }
     images.value = []
     currentImage.value = null
 
@@ -185,14 +207,71 @@ export const useImageGeneration = () => {
       const adaptedParams = adaptRequest('image', requestData)
 
       // Call API | 调用 API
-      const response = await generateImage(adaptedParams, {
-        requestType: 'json',
-        endpoint: modelStore.getImageEndpoint(params.model),
-        responseType: modelStore.providerConfig?.imageResponseType
-      })
+      const isAsyncImg2Img = params.model === 'aihorde/sdxl-img2img' || params.model === 'aihorde/sdxl-text2img'
+      const submitAttempts = isAsyncImg2Img ? 12 : 1
+      let response
+      let submitError
+      for (let attempt = 0; attempt < submitAttempts; attempt += 1) {
+        try {
+          response = await generateImage(adaptedParams, {
+            requestType: 'json',
+            endpoint: modelStore.getImageEndpoint(params.model),
+            responseType: modelStore.providerConfig?.imageResponseType
+          })
+          submitError = null
+          break
+        } catch (err) {
+          submitError = err
+          const statusCode = Number(err?.response?.status || err?.status || 0)
+          const retryable = statusCode === 0 || statusCode === 408 || statusCode === 429 || statusCode >= 500
+          if (!isAsyncImg2Img || !retryable || attempt === submitAttempts - 1) throw err
+          const retryDelay = Math.min(5 * (attempt + 1), 30)
+          await waitWithProgress(retryDelay, 'retrying', attempt + 1)
+        }
+      }
+      if (!response) throw submitError || new Error('图生图任务提交失败')
 
-      // 适配响应数据
-      const adaptedData = adaptResponse('image', response)
+      let adaptedData
+      if (response?.job_id) {
+        const maxAttempts = 180
+        const interval = 3000
+        let latest = response
+        generationProgress.value = latest
+        for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+          if (attempt > 0) await new Promise(resolve => setTimeout(resolve, interval))
+          try {
+            latest = { ...(await getImageJobStatus(response.job_id)), job_id: response.job_id }
+          } catch (pollError) {
+            // A temporary status-query failure must not turn a queued job into an
+            // immediate node error. Keep the job visible and retry polling.
+            generationProgress.value = {
+              ...latest,
+              status: 'reconnecting',
+              queue_position: null,
+              eta_seconds: null,
+              retry_attempt: attempt + 1,
+              retry_in_seconds: interval / 1000,
+              job_id: response.job_id
+            }
+            continue
+          }
+          generationProgress.value = latest
+          if (latest.status === 'completed' && latest.data?.length) break
+          if (latest.status === 'failed') throw new Error(latest.message || '图生图任务失败')
+        }
+        if (latest.status !== 'completed' || !latest.data?.length) {
+          throw new Error('匿名队列等待超时，请稍后重试或使用已注册账号提高优先级')
+        }
+        adaptedData = latest.data
+      } else {
+        adaptedData = adaptResponse('image', response)
+        generationProgress.value = {
+          status: 'completed',
+          queue_position: response?.queue_position ?? null,
+          eta_seconds: response?.eta_seconds ?? response?.wait_time ?? null,
+          job_id: response?.job_id ?? response?.task_id ?? null
+        }
+      }
 
       images.value = adaptedData
       currentImage.value = adaptedData[0] || null
@@ -204,7 +283,8 @@ export const useImageGeneration = () => {
     }
   }
 
-  return { loading, error, status, images, currentImage, generate, reset }
+  const reset = () => { resetState(); generationProgress.value = null }
+  return { loading, error, status, images, currentImage, generationProgress, generate, reset }
 }
 
 /**

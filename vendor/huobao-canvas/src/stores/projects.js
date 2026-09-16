@@ -6,6 +6,10 @@ import { ref, computed, watch } from 'vue'
 
 // Storage key | 存储键
 const STORAGE_KEY = 'ai-canvas-projects'
+const QUOTA_RETRY_DELAY = 30000
+let storagePausedUntil = 0
+let quotaWarningShown = false
+let lastSavedSnapshot = ''
 
 // Generate unique ID | 生成唯一ID
 const generateId = () => `project_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
@@ -46,10 +50,27 @@ export const loadProjects = () => {
  * Clean node data for storage | 清理节点数据用于存储
  * Removes base64 data URLs to reduce storage size | 移除 base64 数据减小存储大小
  */
+const cleanInlineMedia = (value) => {
+  if (typeof value === 'string') {
+    return /^(data:(?:image|video)\/|blob:)/i.test(value) ? undefined : value
+  }
+  if (Array.isArray(value)) {
+    return value.map(cleanInlineMedia).filter(item => item !== undefined)
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .map(([key, item]) => [key, cleanInlineMedia(item)])
+        .filter(([, item]) => item !== undefined)
+    )
+  }
+  return value
+}
+
 const cleanNodeForStorage = (node) => {
   if (!node.data) return node
   
-  const cleanedData = { ...node.data }
+  const cleanedData = cleanInlineMedia(node.data)
   
   // Remove base64 data | 移除 base64 数据
   if (cleanedData.base64) {
@@ -66,6 +87,11 @@ const cleanNodeForStorage = (node) => {
   if (cleanedData.maskData) {
     delete cleanedData.maskData
   }
+
+  // Runtime-only fields should not trigger large persistent snapshots.
+  delete cleanedData.loading
+  delete cleanedData.progress
+  delete cleanedData.error
   
   return { ...node, data: cleanedData }
 }
@@ -90,14 +116,26 @@ const cleanProjectForStorage = (project) => {
  * Handles QuotaExceededError by compressing data | 通过压缩数据处理配额超限错误
  */
 export const saveProjects = () => {
+  if (Date.now() < storagePausedUntil) return false
+
   // Always clean data before saving | 保存前始终清理数据
   const cleanedProjects = projects.value.map(cleanProjectForStorage)
+  const snapshot = JSON.stringify(cleanedProjects)
+  if (snapshot === lastSavedSnapshot) return true
   
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(cleanedProjects))
+    localStorage.setItem(STORAGE_KEY, snapshot)
+    lastSavedSnapshot = snapshot
+    quotaWarningShown = false
+    return true
   } catch (err) {
     if (err.name === 'QuotaExceededError') {
-      console.warn('localStorage quota exceeded, attempting aggressive cleanup...')
+      // Pause immediately before fallback writes. Vue watchers can trigger several
+      // saves in one render cycle; setting the guard here prevents a retry storm.
+      storagePausedUntil = Date.now() + QUOTA_RETRY_DELAY
+      if (!quotaWarningShown) {
+        console.warn('localStorage quota exceeded, attempting aggressive cleanup...')
+      }
       
       // Remove thumbnails and limit old projects | 移除缩略图并限制旧项目
       const minimalProjects = cleanedProjects.map((project, index) => ({
@@ -109,6 +147,8 @@ export const saveProjects = () => {
       
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(minimalProjects))
+        lastSavedSnapshot = JSON.stringify(minimalProjects)
+        storagePausedUntil = 0
         console.log('Saved with aggressive cleanup')
         window.$message?.warning('存储空间不足，已自动清理部分数据')
       } catch (retryErr) {
@@ -117,17 +157,23 @@ export const saveProjects = () => {
         try {
           const essentialProjects = minimalProjects.slice(0, 5)
           localStorage.setItem(STORAGE_KEY, JSON.stringify(essentialProjects))
+          lastSavedSnapshot = JSON.stringify(essentialProjects)
+          storagePausedUntil = 0
           projects.value = projects.value.slice(0, 5)
           window.$message?.warning('存储空间严重不足，已保留最近 5 个项目')
         } catch (finalErr) {
-          console.error('Cannot save even minimal data:', finalErr)
-          window.$message?.error('存储失败，请清理浏览器存储空间')
+          if (!quotaWarningShown) {
+            console.error('Cannot save even minimal data:', finalErr)
+            window.$message?.error('存储空间不足，已暂停后台保存 30 秒以保持画布流畅')
+            quotaWarningShown = true
+          }
         }
       }
     } else {
       console.error('Failed to save projects:', err)
     }
   }
+  return false
 }
 
 /**

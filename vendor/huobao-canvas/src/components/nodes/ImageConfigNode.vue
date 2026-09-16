@@ -125,6 +125,32 @@
           </template>
         </button>
 
+        <div v-if="generationProgress && generationProgress.status !== 'completed'" class="text-xs text-[var(--text-secondary)] bg-blue-50/70 dark:bg-blue-900/20 rounded px-2 py-1.5 space-y-1">
+          <div class="font-medium text-blue-700 dark:text-blue-300">
+            {{ progressStatusText(generationProgress.status) }}
+          </div>
+          <template v-if="isRetryStatus(generationProgress.status)">
+            <div class="flex items-center justify-between gap-3">
+              <span>重试次数</span>
+              <span>第 {{ generationProgress.retry_attempt || 1 }} 次</span>
+            </div>
+            <div class="flex items-center justify-between gap-3">
+              <span>下次重试</span>
+              <span>{{ formatRetryTime(generationProgress.retry_in_seconds) }}</span>
+            </div>
+          </template>
+          <template v-else-if="showsQueueDetails(generationProgress.status)">
+          <div class="flex items-center justify-between gap-3">
+            <span>排队人数</span>
+            <span>{{ generationProgress.queue_position != null ? `前方 ${generationProgress.queue_position} 名` : generationProgress.status === 'queueing' ? '查询中' : '队列暂未返回' }}</span>
+          </div>
+          <div class="flex items-center justify-between gap-3">
+            <span>预计等待</span>
+            <span>{{ generationProgress.eta_seconds != null ? formatEta(generationProgress.eta_seconds) : generationProgress.status === 'queueing' ? '计算中' : '队列暂未返回' }}</span>
+          </div>
+          </template>
+        </div>
+
         <!-- Error message | 错误信息 -->
         <div v-if="error" class="text-xs text-red-500 mt-2">
           {{ error.message || '生成失败' }}
@@ -184,7 +210,45 @@ const { updateNodeInternals } = useVueFlow()
 const isConfigured = computed(() => !!modelStore.currentApiKey)
 
 // Image generation hook | 图片生成 hook
-const { loading, error, images: generatedImages, generate } = useImageGeneration()
+const { loading, error, images: generatedImages, generationProgress, generate } = useImageGeneration()
+
+const progressStatusText = (status) => ({
+  processing: '正在生成图片',
+  submitting: '正在提交任务',
+  retrying: '服务繁忙，正在等待重试',
+  reconnecting: '正在等待队列响应',
+  queueing: '正在获取排队信息'
+}[status] || '正在排队')
+
+const isRetryStatus = (status) => status === 'retrying' || status === 'reconnecting'
+const showsQueueDetails = (status) => status === 'queueing' || status === 'queued' || status === 'processing'
+const formatRetryTime = (seconds) => `${Math.max(1, Math.ceil(Number(seconds) || 1))} 秒后`
+
+const formatEta = (seconds) => {
+  const value = Number(seconds)
+  if (!Number.isFinite(value) || value < 1) return '不到 1 分钟'
+  if (value < 60) return `约 ${Math.ceil(value)} 秒`
+  const minutes = Math.ceil(value / 60)
+  return `约 ${minutes} 分钟`
+}
+
+const normalizeReferenceImage = async (value) => {
+  const source = String(value || '')
+  if (!source.startsWith('blob:') && !source.startsWith('http://') && !source.startsWith('https://')) return source
+  try {
+    const response = await fetch(source)
+    if (!response.ok) return source
+    const blob = await response.blob()
+    return await new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result)
+    reader.onerror = reject
+    reader.readAsDataURL(blob)
+    })
+  } catch {
+    return source
+  }
+}
 
 // Local state | 本地状态
 const showHandleMenu = ref(false)
@@ -546,6 +610,21 @@ const updateSize = () => {
 // Created image node ID | 创建的图片节点 ID
 const createdImageNodeId = ref(null)
 
+watch(generationProgress, (progress) => {
+  if (!createdImageNodeId.value || !progress) return
+  updateNode(createdImageNodeId.value, {
+    loading: true,
+    progress: {
+      status: progress.status,
+      queuePosition: progress.queue_position ?? null,
+      etaSeconds: progress.eta_seconds ?? null,
+      retryAttempt: progress.retry_attempt ?? null,
+      retryInSeconds: progress.retry_in_seconds ?? null,
+      jobId: progress.job_id ?? null
+    }
+  })
+}, { deep: true })
+
 // Find connected output image node | 查找已连接的输出图片节点
 const findConnectedOutputImageNode = (onlyEmpty = true) => {
   // Find edges where this node is the source | 查找以当前节点为源的边
@@ -602,7 +681,7 @@ const handleGenerate = async (mode = 'auto') => {
     // Replace mode: find any connected image node | 替换模式：查找任意连接的图片节点
     imageNodeId = findConnectedOutputImageNode(false)
     if (imageNodeId) {
-      updateNode(imageNodeId, { loading: true, url: '' })
+      updateNode(imageNodeId, { loading: true, url: '', error: null })
     }
   } else if (mode === 'new') {
     // New mode: always create new node | 新建模式：始终创建新节点
@@ -611,7 +690,7 @@ const handleGenerate = async (mode = 'auto') => {
     // Auto mode: check for empty connected node first | 自动模式：先检查空白连接节点
     imageNodeId = findConnectedOutputImageNode(true)
     if (imageNodeId) {
-      updateNode(imageNodeId, { loading: true })
+      updateNode(imageNodeId, { loading: true, error: null })
     }
   }
   
@@ -653,8 +732,11 @@ const handleGenerate = async (mode = 'auto') => {
 
   try {
     // Build request params | 构建请求参数
+    const requestModel = refImages.length > 0 && localModel.value === 'pollinations/flux'
+      ? 'aihorde/sdxl-img2img'
+      : localModel.value
     const params = {
-      model: localModel.value,
+      model: requestModel,
       prompt: prompt,
       size: localSize.value,
       quality: localQuality.value,
@@ -663,7 +745,7 @@ const handleGenerate = async (mode = 'auto') => {
 
     // Add reference image if provided | 如果有参考图则添加
     if (refImages.length > 0) {
-      params.image = refImages
+      params.image = await Promise.all(refImages.map(normalizeReferenceImage))
     }
 
     const result = await generate(params)
@@ -674,7 +756,7 @@ const handleGenerate = async (mode = 'auto') => {
         url: result[0].url,
         loading: false,
         label: '文生图',
-        model: localModel.value,
+        model: requestModel,
         updatedAt: Date.now()
       })
       
@@ -683,13 +765,14 @@ const handleGenerate = async (mode = 'auto') => {
     }
     window.$message?.success('图片生成成功')
   } catch (err) {
+    const message = err?.response?.data?.error?.message || err?.response?.data?.message || err.message || '生成失败'
     // Update node to show error | 更新节点显示错误
     updateNode(imageNodeId, {
       loading: false,
-      error: err.message || '生成失败',
+      error: message,
       updatedAt: Date.now()
     })
-    window.$message?.error(err.message || '图片生成失败')
+    window.$message?.error(message)
   }
 }
 

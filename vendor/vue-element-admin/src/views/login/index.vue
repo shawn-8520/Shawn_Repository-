@@ -50,8 +50,25 @@
 
       <el-button :loading="loading" type="primary" style="width:100%;margin-bottom:30px;" @click.native.prevent="handleLogin">{{ text.login }}</el-button>
 
-      <div class="login-access-note">仅支持管理员已批准或在后台创建的账号登录。</div>
+      <div class="login-access-note">
+        <p>{{ accessNotice }}</p>
+        <el-button type="text" class="register-link" @click="registerVisible = true">没有账号？提交注册申请</el-button>
+      </div>
     </el-form>
+
+    <el-dialog title="注册申请" :visible.sync="registerVisible" width="520px" append-to-body>
+      <el-form :model="registerForm" label-width="82px">
+        <el-form-item label="姓名"><el-input v-model="registerForm.name" placeholder="请输入姓名" /></el-form-item>
+        <el-form-item label="账号"><el-input v-model="registerForm.account" placeholder="请输入登录账号" /></el-form-item>
+        <el-form-item label="密码"><el-input v-model="registerForm.password" type="password" show-password placeholder="至少 6 位" /></el-form-item>
+        <el-form-item label="邮箱"><el-input v-model="registerForm.email" placeholder="请输入邮箱" /></el-form-item>
+        <el-form-item label="申请说明"><el-input v-model="registerForm.message" type="textarea" :rows="3" placeholder="可选" /></el-form-item>
+      </el-form>
+      <div slot="footer">
+        <el-button @click="registerVisible = false">取消</el-button>
+        <el-button type="primary" :loading="registering" @click="submitRegistration">提交申请</el-button>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -92,6 +109,9 @@ export default {
       capsTooltip: false,
       loading: false,
       showDialog: false,
+      registerVisible: false,
+      registering: false,
+      registerForm: { name: '', account: '', password: '', email: '', message: '' },
       redirect: undefined,
       otherQuery: {},
       lang: getLanguage()
@@ -110,6 +130,9 @@ export default {
     },
     langButtonText() {
       return t('switchLabel', this.lang)
+    },
+    accessNotice() {
+      return this.$route.query.notice || '没有有效账号不能进入工作台，请先注册并等待管理员审核。'
     }
   },
   watch: {
@@ -185,6 +208,30 @@ export default {
     },
     toggleLang() {
       this.lang = toggleLanguage()
+    },
+    async submitRegistration() {
+      const form = this.registerForm
+      if (!form.name.trim() || !form.account.trim() || form.password.length < 6 || !form.email.trim()) {
+        this.$message.warning('请填写姓名、账号、至少 6 位密码和邮箱')
+        return
+      }
+      this.registering = true
+      try {
+        const response = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(form)
+        })
+        const payload = await response.json()
+        if (payload.code !== 20000) throw new Error(payload.message || '注册申请提交失败')
+        this.$message.success(payload.message || '注册申请已提交，请等待管理员审核')
+        this.registerVisible = false
+        this.registerForm = { name: '', account: '', password: '', email: '', message: '' }
+      } catch (error) {
+        this.$message.error(error.message || '注册申请提交失败')
+      } finally {
+        this.registering = false
+      }
     },
     loadRememberedLogin() {
       try {
@@ -282,6 +329,10 @@ $cursor: #fff;
   font-size: 14px;
   line-height: 1.6;
   text-align: center;
+
+  p { margin: 0 0 4px; }
+
+  .register-link { color: #66b1ff; font-weight: 700; }
 }
 </style>
 
