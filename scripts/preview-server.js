@@ -42,7 +42,7 @@ function secureTextEqual(actual, expected) {
 }
 
 function authIsConfigured() {
-  return Boolean(adminAccount && adminPassword && authSecret.length >= 32);
+  return authSecret.length >= 32 && Boolean((adminAccount && adminPassword) || readMembers().members.length);
 }
 
 function createAdminToken(account) {

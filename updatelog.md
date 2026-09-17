@@ -1,5 +1,11 @@
 # Clink AI 更新日志
 
+## 2026-09-17 新旧发布分支合并
+
+- 将线上旧分支 `codex/admin-online-auth` 合入最新 `main`，冲突以 `main` 为准，保留服务器注册提交、成员审核与 systemd 部署兼容；重新生成后台和单文件发布产物。
+- 统一注册与成员管理接口契约：注册申请提交到 `/api/auth/register`，后台通过 `/api/admin/registrations` 审核，成员密码只显示是否已配置，不再向界面暴露明文。
+- 验证：后台生产构建、`npm run build:standalone`、`npm run check`、`npm run health`、`git diff --check` 通过；隔离数据环境实际完成“注册 → 管理员登录 → 审核 → 成员登录 → 成员查询”；真实预览完成 AI速记切换、添加文件弹窗开关、后台成员页加载及新增成员弹窗开关。
+
 ## 2026-09-17 GitHub Actions 点击发布
 
 - 新增 `.github/workflows/deploy-production.yml`：支持从 GitHub Actions 手动点击发布，通过严格主机指纹校验连接阿里云服务器，执行现有部署脚本，并自动验证线上 `/api/health`。

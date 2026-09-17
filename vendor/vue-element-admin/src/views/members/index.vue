@@ -37,10 +37,9 @@
         </div>
         <el-tag type="warning">待审核 {{ pendingRequests.length }}</el-tag>
       </div>
-      <el-table :data="registrationRequests" border style="width: 100%;">
+      <el-table v-loading="loading" :data="registrationRequests" border style="width: 100%;">
         <el-table-column prop="name" label="姓名" min-width="130" />
         <el-table-column prop="account" label="账号" min-width="130" />
-        <el-table-column prop="password" label="密码" min-width="130" />
         <el-table-column prop="email" label="邮箱" min-width="200" />
         <el-table-column prop="message" label="申请说明" min-width="220" show-overflow-tooltip />
         <el-table-column prop="status" label="状态" width="110" align="center">
@@ -62,10 +61,14 @@
       <div class="table-toolbar">
         <el-input v-model="keyword" placeholder="搜索姓名、账号、邮箱、角色" prefix-icon="el-icon-search" clearable />
       </div>
-      <el-table :data="filteredMembers" border style="width: 100%;">
+      <el-table v-loading="loading" :data="filteredMembers" border style="width: 100%;">
         <el-table-column prop="name" label="姓名" min-width="140" />
         <el-table-column prop="account" label="账号" min-width="140" />
-        <el-table-column prop="password" label="密码" min-width="140" />
+        <el-table-column label="登录凭据" width="120" align="center">
+          <template slot-scope="{ row }">
+            <el-tag :type="row.passwordConfigured ? 'success' : 'danger'">{{ row.passwordConfigured ? '已设置' : '未设置' }}</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="email" label="邮箱" min-width="220" />
         <el-table-column label="角色" width="140" align="center">
           <template slot-scope="{ row }">
@@ -96,7 +99,7 @@
           <el-input v-model="form.account" placeholder="请输入登录账号" />
         </el-form-item>
         <el-form-item label="密码">
-          <el-input v-model="form.password" placeholder="请输入登录密码" show-password />
+          <el-input v-model="form.password" :placeholder="editingId ? '留空则保持原密码' : '请输入登录密码'" show-password />
         </el-form-item>
         <el-form-item label="邮箱">
           <el-input v-model="form.email" placeholder="请输入邮箱" />
@@ -123,9 +126,14 @@
 </template>
 
 <script>
-const STORAGE_KEY = 'kb-admin-members'
-const REGISTRATION_REQUESTS_KEY = 'kb-registration-requests'
-const defaultMembers = []
+import {
+  createMember,
+  deleteMember,
+  getMembers,
+  getRegistrationRequests,
+  reviewRegistration,
+  updateMember
+} from '@/api/members'
 
 function createBlankForm() {
   return {
@@ -138,22 +146,6 @@ function createBlankForm() {
   }
 }
 
-function normalizeMember(member) {
-  const name = String(member.name || '未命名成员')
-  const email = String(member.email || '')
-  const fallbackAccount = email.split('@')[0] || name
-  return {
-    ...member,
-    name,
-    account: String(member.account || fallbackAccount),
-    password: String(member.password || ''),
-    email,
-    role: String(member.role || '编辑者'),
-    status: String(member.status || '启用'),
-    lastActive: String(member.lastActive || '刚刚')
-  }
-}
-
 export default {
   name: 'Members',
   data() {
@@ -162,8 +154,9 @@ export default {
       dialogVisible: false,
       editingId: '',
       form: createBlankForm(),
-      members: this.loadMembers(),
-      registrationRequests: this.loadRegistrationRequests()
+      members: [],
+      registrationRequests: [],
+      loading: false
     }
   },
   computed: {
@@ -174,7 +167,7 @@ export default {
       const keyword = this.keyword.trim().toLowerCase()
       if (!keyword) return this.members
       return this.members.filter(member => {
-        return [member.name, member.account, member.password, member.email, member.role, member.status].some(value => String(value).toLowerCase().includes(keyword))
+        return [member.name, member.account, member.email, member.role, member.status].some(value => String(value).toLowerCase().includes(keyword))
       })
     },
     adminCount() {
@@ -184,38 +177,25 @@ export default {
       return this.members.filter(member => member.status === '启用').length
     }
   },
+  created() {
+    this.initializeMembers()
+  },
   methods: {
-    loadMembers() {
+    async initializeMembers() {
+      this.loading = true
       try {
-        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null')
-        return (Array.isArray(saved) ? saved : defaultMembers).map(normalizeMember).filter(member => member.role !== '访客')
-      } catch (error) {
-        return defaultMembers.map(normalizeMember).filter(member => member.role !== '访客')
+        await this.refreshData()
+      } finally {
+        this.loading = false
       }
     },
-    persistMembers() {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.members))
-    },
-    loadRegistrationRequests() {
-      try {
-        const saved = JSON.parse(localStorage.getItem(REGISTRATION_REQUESTS_KEY) || '[]')
-        return Array.isArray(saved) ? saved.map(request => ({
-          id: String(request.id || `req-${Date.now()}`),
-          name: String(request.name || ''),
-          account: String(request.account || ''),
-          password: String(request.password || ''),
-          email: String(request.email || ''),
-          message: String(request.message || ''),
-          role: String(request.role || '编辑者'),
-          status: String(request.status || '待审核'),
-          createdAt: String(request.createdAt || '刚刚')
-        })) : []
-      } catch (error) {
-        return []
-      }
-    },
-    persistRegistrationRequests() {
-      localStorage.setItem(REGISTRATION_REQUESTS_KEY, JSON.stringify(this.registrationRequests))
+    async refreshData() {
+      const [membersResponse, requestsResponse] = await Promise.all([
+        getMembers(),
+        getRegistrationRequests()
+      ])
+      this.members = Array.isArray(membersResponse.data) ? membersResponse.data : []
+      this.registrationRequests = Array.isArray(requestsResponse.data) ? requestsResponse.data : []
     },
     openCreate() {
       this.editingId = ''
@@ -224,27 +204,21 @@ export default {
     },
     openEdit(member) {
       this.editingId = member.id
-      this.form = { name: member.name, account: member.account, password: member.password, email: member.email, role: member.role, status: member.status }
+      this.form = { name: member.name, account: member.account, password: '', email: member.email, role: member.role, status: member.status }
       this.dialogVisible = true
     },
-    saveMember() {
-      if (!this.form.name.trim() || !this.form.account.trim() || !this.form.password.trim() || !this.form.email.trim()) {
+    async saveMember() {
+      if (!this.form.name.trim() || !this.form.account.trim() || (!this.editingId && !this.form.password) || !this.form.email.trim()) {
         this.$message.warning('请填写姓名、账号、密码和邮箱')
         return
       }
       if (this.editingId) {
-        this.members = this.members.map(member => {
-          return member.id === this.editingId ? { ...member, ...this.form, lastActive: '刚刚' } : member
-        })
+        await updateMember(this.editingId, this.form)
       } else {
-        this.members.unshift({
-          id: `m-${Date.now()}`,
-          ...this.form,
-          lastActive: '刚刚'
-        })
+        await createMember(this.form)
       }
-      this.persistMembers()
       this.dialogVisible = false
+      await this.refreshData()
       this.$message.success('保存成功')
     },
     removeMember(member) {
@@ -252,38 +226,20 @@ export default {
         confirmButtonText: '确认',
         cancelButtonText: '取消',
         type: 'warning'
-      }).then(() => {
-        this.members = this.members.filter(item => item.id !== member.id)
-        this.persistMembers()
+      }).then(async() => {
+        await deleteMember(member.id)
+        await this.refreshData()
         this.$message.success('删除成功')
       }).catch(() => {})
     },
-    approveRequest(request) {
-      const exists = this.members.some(member => member.account === request.account)
-      if (!exists) {
-        this.members.unshift({
-          id: `m-${Date.now()}`,
-          name: request.name,
-          account: request.account,
-          password: request.password,
-          email: request.email,
-          role: request.role || '编辑者',
-          status: '启用',
-          lastActive: '刚刚'
-        })
-        this.persistMembers()
-      }
-      this.registrationRequests = this.registrationRequests.map(item => {
-        return item.id === request.id ? { ...item, status: '已同意' } : item
-      })
-      this.persistRegistrationRequests()
+    async approveRequest(request) {
+      await reviewRegistration(request.id, 'approve')
+      await this.refreshData()
       this.$message.success('已同意注册申请')
     },
-    rejectRequest(request) {
-      this.registrationRequests = this.registrationRequests.map(item => {
-        return item.id === request.id ? { ...item, status: '已拒绝' } : item
-      })
-      this.persistRegistrationRequests()
+    async rejectRequest(request) {
+      await reviewRegistration(request.id, 'reject')
+      await this.refreshData()
       this.$message.success('已拒绝注册申请')
     }
   }

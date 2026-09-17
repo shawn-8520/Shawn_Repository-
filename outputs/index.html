@@ -1336,6 +1336,7 @@ const statUserTrend = document.getElementById("statUserTrend");
 const transitionOverlay = document.getElementById("transitionOverlay");
 const tabs = ["home", "works", "system", "skills"];
 const PROJECT_STATE_ENDPOINT = "/api/project-state";
+const REGISTRATION_REQUESTS_ENDPOINT = "/api/auth/register";
 const RUNTIME_STATS_ENDPOINT = "/api/runtime-stats";
 const ANNOUNCEMENTS_ENDPOINT = "/api/announcements";
 const MODEL_SETTINGS_ENDPOINT = "/api/model-settings";
@@ -1347,7 +1348,6 @@ const DASHBOARD_LAYOUT_VERSION_KEY = "aiTerminalAgentDashboardLayout";
 const AGENT_VIEW_MODE_KEY = "aiTerminalAgentViewMode";
 const AGENT_CATEGORY_COLLAPSED_KEY = "aiTerminalAgentCategoriesCollapsed";
 const AGENT_CATEGORY_STATE_KEY = "aiTerminalAgentCategoryState";
-const REGISTRATION_REQUESTS_KEY = "kb-registration-requests";
 const supportedFileTypes = [
   { value: "md", label: "Markdown" },
   { value: "txt", label: "Text" },
@@ -2736,16 +2736,7 @@ function closeRegisterModal() {
   registerModal.hidden = true;
 }
 
-function loadRegistrationRequests() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(REGISTRATION_REQUESTS_KEY) || "[]");
-    return Array.isArray(saved) ? saved : [];
-  } catch (error) {
-    return [];
-  }
-}
-
-function submitRegistrationRequest(event) {
+async function submitRegistrationRequest(event) {
   event.preventDefault();
   const name = document.getElementById("registerName").value.trim();
   const account = document.getElementById("registerAccount").value.trim();
@@ -2756,27 +2747,21 @@ function submitRegistrationRequest(event) {
     registerFeedback.textContent = "请填写姓名、账号、密码和邮箱。";
     return;
   }
-  const requests = loadRegistrationRequests();
-  const duplicate = requests.some((item) => item.account === account && item.status === "待审核");
-  if (duplicate) {
-    registerFeedback.textContent = "该账号已有待审核申请，请等待管理员处理。";
-    return;
+  registerFeedback.textContent = "正在提交申请…";
+  try {
+    const response = await fetch(REGISTRATION_REQUESTS_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, account, password, email, message })
+    });
+    const result = await response.json();
+    if (!response.ok || result.code !== 20000) throw new Error(result.message || "提交失败");
+    registerForm.reset();
+    registerFeedback.textContent = "申请已提交，等待管理员审核。";
+    setTimeout(closeRegisterModal, 900);
+  } catch (error) {
+    registerFeedback.textContent = error.message || "提交失败，请稍后重试。";
   }
-  requests.unshift({
-    id: "req-" + Date.now(),
-    name,
-    account,
-    password,
-    email,
-    message,
-    role: "编辑者",
-    status: "待审核",
-    createdAt: new Date().toLocaleString("zh-CN", { hour12: false })
-  });
-  localStorage.setItem(REGISTRATION_REQUESTS_KEY, JSON.stringify(requests));
-  registerForm.reset();
-  registerFeedback.textContent = "申请已提交，等待管理员审核。";
-  setTimeout(closeRegisterModal, 900);
 }
 
 function returnToIntroFromDesktop() {

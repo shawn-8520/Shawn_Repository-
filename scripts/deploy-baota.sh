@@ -19,7 +19,7 @@ git -C "$REPO_DIR" fetch origin "$BRANCH:refs/remotes/origin/$BRANCH"
 git -C "$REPO_DIR" merge --ff-only "origin/$BRANCH"
 
 mkdir -p "$SITE_DIR"
-rsync -a --delete "$REPO_DIR/outputs/" "$SITE_DIR/"
+rsync -a --delete --exclude=".user.ini" "$REPO_DIR/outputs/" "$SITE_DIR/"
 
 mkdir -p "$DATA_DIR"
 
