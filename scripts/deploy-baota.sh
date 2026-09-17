@@ -37,7 +37,25 @@ else
   exit 1
 fi
 
-curl --fail --silent --show-error "http://127.0.0.1:8099/api/health" >/dev/null
+health_url="http://127.0.0.1:8099/api/health"
+health_ready=false
+for attempt in $(seq 1 20); do
+  if curl --fail --silent --show-error --connect-timeout 2 --max-time 5 "$health_url" >/dev/null 2>&1; then
+    health_ready=true
+    break
+  fi
+  echo "Waiting for Clink AI API health check ($attempt/20)..."
+  sleep 3
+done
+
+if [ "$health_ready" != true ]; then
+  echo "Clink AI API did not become healthy within 60 seconds: $health_url" >&2
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl status "$SYSTEMD_SERVICE" --no-pager --lines=30 >&2 || true
+    journalctl -u "$SYSTEMD_SERVICE" --no-pager -n 50 >&2 || true
+  fi
+  exit 1
+fi
 
 echo "Deployed outputs/ to $SITE_DIR"
 echo "Clink AI API is healthy on http://127.0.0.1:8099"
