@@ -5,6 +5,8 @@ import { clientJs } from "./standalone/client.js";
 import { css, interactionCss, productThemeCss } from "./standalone/styles.js";
 
 const root = process.cwd();
+const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const appVersion = packageJson.version;
 const contentDir = path.join(root, "content");
 const outputDir = path.join(root, "outputs");
 const outputPath = path.join(outputDir, "ai-terminal-kb.html");
@@ -383,7 +385,7 @@ function renderHtml({ docs, navItems }) {
       <footer class="desktop-footer" aria-label="项目底部信息">
         <div class="desktop-footer-left">
           <span>© 2026 Clink AI. All rights reserved.</span>
-          <b>版本 v2.1.1</b>
+          <b>版本 v${appVersion}</b>
         </div>
         <nav class="desktop-footer-links" aria-label="帮助入口">
           <a href="javascript:void(0)" role="button">隐私政策</a>
