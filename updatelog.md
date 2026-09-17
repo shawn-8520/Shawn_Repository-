@@ -5,6 +5,7 @@
 - 新增 `.github/workflows/deploy-production.yml`：支持从 GitHub Actions 手动点击发布，通过严格主机指纹校验连接阿里云服务器，执行现有部署脚本，并自动验证线上 `/api/health`。
 - 更新 `deploy.md`：补充首次配置所需的 GitHub Secrets、服务器授权条件和日常点击发布流程；所有密钥仍只保存在 GitHub Secrets 与服务器私密配置中。
 - 根据线上服务器实际环境修正发布脚本：保留 PM2 支持，并在 PM2 不存在时自动重启现有 `clink-ai-api.service`；Actions 会先快进更新服务器仓库，再执行部署与健康检查。
+- 兼容服务器仓库仅跟踪旧分支的历史配置：发布时显式将远程 `main` 写入 `origin/main` 后再快进合并，避免因缺少远程引用而中断。
 
 ## 2026-09-16 v2.2.0 发布
 

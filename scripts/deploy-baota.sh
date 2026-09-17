@@ -15,7 +15,7 @@ if [ ! -d "$REPO_DIR/.git" ]; then
   exit 1
 fi
 
-git -C "$REPO_DIR" fetch origin "$BRANCH"
+git -C "$REPO_DIR" fetch origin "$BRANCH:refs/remotes/origin/$BRANCH"
 git -C "$REPO_DIR" merge --ff-only "origin/$BRANCH"
 
 mkdir -p "$SITE_DIR"
