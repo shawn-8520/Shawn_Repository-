@@ -13,7 +13,7 @@
 线上由两部分组成：
 
 1. Nginx 提供 `outputs/` 静态页面。
-2. PM2 运行 `scripts/preview-server.js`，Nginx 将 `/api/` 反向代理到 `127.0.0.1:8099`。
+2. PM2 或服务器现有的 `clink-ai-api.service` 运行 `scripts/preview-server.js`，Nginx 将 `/api/` 反向代理到 `127.0.0.1:8099`。
 
 首次部署：
 
@@ -31,7 +31,7 @@ CLINK_ADMIN_PASSWORD=use-a-strong-private-password
 CLINK_AUTH_SECRET=use-at-least-32-random-characters
 ```
 
-管理员密码只保存在服务器私有环境中。修改配置后需要重启 PM2。
+管理员密码只保存在服务器私有环境中。修改配置后需要重启对应的 PM2 或 systemd 服务。
 
 在宝塔的网站 Nginx 配置的 `server {}` 中加入 `deploy/nginx-api.conf` 的 `location` 内容，然后重载 Nginx。
 
@@ -61,7 +61,7 @@ curl https://w-shawn.cn/api/health
 | `DEPLOY_SSH_KEY` | 专用部署私钥完整内容 |
 | `DEPLOY_KNOWN_HOSTS` | 已人工核验的服务器 SSH 主机公钥记录 |
 
-服务器须提前把对应公钥加入部署用户的 `~/.ssh/authorized_keys`，并确保该用户有权进入 `/www/wwwroot/ai-terminal-kb-repo`、更新站点目录及运行 PM2。密钥、密码和主机私密配置不得写入仓库。
+服务器须提前把对应公钥加入部署用户的 `~/.ssh/authorized_keys`，并确保该用户有权进入 `/www/wwwroot/ai-terminal-kb-repo`、更新站点目录及重启 PM2 或 `clink-ai-api.service`。密钥、密码和主机私密配置不得写入仓库。
 
 推荐发布顺序：
 

@@ -60,7 +60,7 @@ jobs:
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            'cd /www/wwwroot/ai-terminal-kb-repo && bash scripts/deploy-baota.sh'
+            'git -C /www/wwwroot/ai-terminal-kb-repo fetch origin main && git -C /www/wwwroot/ai-terminal-kb-repo merge --ff-only origin/main && cd /www/wwwroot/ai-terminal-kb-repo && bash scripts/deploy-baota.sh'
 
       - name: 验证线上健康接口
         run: |
@@ -75,4 +75,3 @@ jobs:
             --connect-timeout 10 \
             --max-time 30 \
             https://w-shawn.cn/api/health
-
