@@ -60,7 +60,7 @@ jobs:
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            'git -C /www/wwwroot/ai-terminal-kb-repo fetch origin main:refs/remotes/origin/main && git -C /www/wwwroot/ai-terminal-kb-repo merge --ff-only origin/main && cd /www/wwwroot/ai-terminal-kb-repo && bash scripts/deploy-baota.sh'
+            'set -euo pipefail; repo=/www/wwwroot/ai-terminal-kb-repo; git -C "$repo" stash push --include-untracked -m "github-actions-pre-deploy-$(date +%Y%m%d-%H%M%S)"; git -C "$repo" fetch origin main:refs/remotes/origin/main; git -C "$repo" merge --ff-only origin/main; cd "$repo"; bash scripts/deploy-baota.sh'
 
       - name: 验证线上健康接口
         run: |
