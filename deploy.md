@@ -47,6 +47,29 @@ curl https://w-shawn.cn/api/health
 {"ok":true,"data":{"service":"clink-ai-api","status":"ready"}}
 ```
 
+## GitHub Actions 点击发布
+
+仓库提供 `.github/workflows/deploy-production.yml`。本地代码推送到 GitHub 后，可在仓库的 `Actions` 页面选择“发布线上版本”，点击 `Run workflow` 完成部署与线上健康检查，无需登录宝塔。
+
+首次使用需要在 GitHub 仓库的 `Settings → Secrets and variables → Actions` 中配置：
+
+| Secret | 用途 |
+| --- | --- |
+| `DEPLOY_HOST` | 阿里云服务器 IP，例如 `8.153.198.69` |
+| `DEPLOY_PORT` | SSH 端口 |
+| `DEPLOY_USER` | 专用部署用户 |
+| `DEPLOY_SSH_KEY` | 专用部署私钥完整内容 |
+| `DEPLOY_KNOWN_HOSTS` | 已人工核验的服务器 SSH 主机公钥记录 |
+
+服务器须提前把对应公钥加入部署用户的 `~/.ssh/authorized_keys`，并确保该用户有权进入 `/www/wwwroot/ai-terminal-kb-repo`、更新站点目录及运行 PM2。密钥、密码和主机私密配置不得写入仓库。
+
+推荐发布顺序：
+
+1. 本地完成开发并按真实使用路径验证。
+2. 推送代码到 GitHub 的 `main` 分支。
+3. 打开 `Actions → 发布线上版本 → Run workflow`。
+4. 等待“部署到阿里云服务器”和“验证线上健康接口”均显示成功。
+
 ## 前端组件库口径
 
 当前项目静态预览页仍以本地 HTML/CSS/JavaScript 构建产物为主。

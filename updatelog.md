@@ -1,5 +1,10 @@
 # Clink AI 更新日志
 
+## 2026-09-17 GitHub Actions 点击发布
+
+- 新增 `.github/workflows/deploy-production.yml`：支持从 GitHub Actions 手动点击发布，通过严格主机指纹校验连接阿里云服务器，执行现有部署脚本，并自动验证线上 `/api/health`。
+- 更新 `deploy.md`：补充首次配置所需的 GitHub Secrets、服务器授权条件和日常点击发布流程；所有密钥仍只保存在 GitHub Secrets 与服务器私密配置中。
+
 ## 2026-09-16 v2.2.0 发布
 
 - 版本升级至 `2.2.0`，新增 `docs/RELEASE_NOTES_2.2.0.md`，重新生成管理后台、无限画布和单文件工作台产物。
